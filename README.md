@@ -4,7 +4,7 @@
 
 ## New live handshake finding — 14 November 2026
 
-**First startup-class message observed without any sent image/HEX payload:** the tag subscribed to `5CB8`, then to the newly exposed `5CB9` flow-control CCCD, then wrote a **108-byte** `5CBA` payload containing the ASCII device model `ZKC26B-NA` only **42 ms later**. This strongly suggests our former `5CB9` schema was incomplete; a mode-OFF/mode-ON controlled comparison is still needed. Full raw log, byte offsets and next tests: [DSPS_HANDSHAKE_2026-11-14.md](DSPS_HANDSHAKE_2026-11-14.md). **Do not assume this is a validated image ACK or transmit flow-control bytes automatically.**
+**Repeated startup-class messages observed without any sent image/HEX payload:** five **108-byte** `5CBA` payloads followed the tag's subscriptions to `5CB8` and newly exposed `5CB9` flow-control CCCD by **42–47 ms** (after `5CB9`). All contain ASCII `ZKC26B-NA`, a four-byte sequence incrementing **0→4**, and a seconds-like counter whose **+614** change agrees with **614.091 s** elapsed wall time. The old GATT schema may have been incomplete, but a default-OFF control is still required. Full raw log, byte offsets and next tests: [DSPS_HANDSHAKE_2026-11-14.md](DSPS_HANDSHAKE_2026-11-14.md). **Do not assume this is a validated image ACK or transmit flow-control bytes automatically.**
 
 ## Current external research (14 November 2026)
 
