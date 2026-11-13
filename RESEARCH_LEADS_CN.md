@@ -73,7 +73,9 @@ The requester has a **different** ZKONG tag, `ZKC42V` / `ZK_EL_OM42V_V1.0` / `OM
 
 A separate ESL's app logs revealed an image packet with command byte `13`, sequence byte, payload length `B4` (=180), payload, trailing check byte; another command `12` carried a red plane. The author found 26 full packets plus a 56-byte tail, totalling 4,736 pixel bytes per plane for a 296x128 display.
 
-**Transferable method, not transferable wire format:** collect a **known-good** update, isolate relevant BLE traffic by characteristic and time, compare sequential packets, infer length/checksum and final refresh. Our ZKC26B's `5CB8` uses notifications in the opposite direction from many phone-central products; `13`, `12` and `B4` are **not validated ZKC26B commands**.
+**Source-code follow-up:** the article links [gadore/ink-screen-bluetooth](https://github.com/gadore/ink-screen-bluetooth), whose `app.js` implements `FFE0` service / `FFE2` characteristic on **a different tag**. Its per-chunk checksum is the **sum of pixel data bytes modulo 256**, it uses 180-data-byte chunks with the fields above, and sends a final four-byte `50 00 01 01` command. This gives us a complete, inspectable example of *how* another tag frames two colour planes; it supplies **no reason** to transmit those bytes to ZKC26B.
+
+**Transferable method, not transferable wire format:** collect a **known-good** update, isolate relevant BLE traffic by characteristic and time, compare sequential packets, infer length/checksum and final refresh. Our ZKC26B's `5CB8` uses notifications in the opposite direction from many phone-central products; `13`, `12`, `50` and `B4` are **not validated ZKC26B commands**.
 
 **Next step:** if a known-good image update from the ZKONG app/server is available, save the encoded `sendDataList` and pair it with a full GATT trace. Compare two images differing by one pixel or colour; look for headers, address/sequence fields, trailer, checksum and request-dependent server output.
 
