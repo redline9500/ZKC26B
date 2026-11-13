@@ -4,7 +4,7 @@
 
 ## Current external research (14 November 2026)
 
-See [RESEARCH_LEADS_CN.md](RESEARCH_LEADS_CN.md) for verified Chinese-language OnMicro resources, the published Dialog/Renesas DSPS UUID/flow-control mapping, open questions about the stock ZKC26B, and a sequential follow-up ledger. The source confirms that `5CB9` is normally a one-byte FLOW_ON/FLOW_OFF characteristic; it does **not** establish that ZKONG uses the reference application unmodified. The existing app's `5CB9` lacks DSPS's standard NOTIFY/CCCD configuration; this is recorded as a potential controlled compatibility experiment, not a proven cause of missing responses.
+See [RESEARCH_LEADS_CN.md](RESEARCH_LEADS_CN.md) for verified Chinese-language OnMicro resources, the published Dialog/Renesas DSPS UUID/flow-control mapping, open questions about the stock ZKC26B, and a sequential follow-up ledger. The source confirms that `5CB9` is normally a one-byte FLOW_ON/FLOW_OFF characteristic; it does **not** establish that ZKONG uses the reference application unmodified. The existing app's **default** `5CB9` lacks DSPS's standard NOTIFY/CCCD configuration. A default-off **Experimental DSPS compatibility** option is now available for a controlled comparison on the next GATT server start. It sends no flow-control bytes and is not evidence that ZKONG follows the standard.
 
 ## What was established
 
