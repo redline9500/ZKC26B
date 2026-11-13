@@ -108,6 +108,7 @@ public class MainActivity extends Activity {
     // Prevent a race where an already-delivered reply could be followed by one more send.
     private final Object sweepSendGuard = new Object();
     private File sweepLogFile;
+    private volatile boolean sweepDiskLogFailed = false;
     private final Runnable sweepNotifyTimeout = () -> {
         if (!sweepArmed.get() || sweepPendingIndex < 0) return;
         int pending = sweepPendingIndex;
@@ -203,7 +204,7 @@ public class MainActivity extends Activity {
         button(body, "Resume from last saved position", v -> confirmResumeSweep());
         button(body, "Pause sweep (keep GATT server running)", v -> pauseSweep("Paused manually"));
         button(body, "Export last saved sweep log (.txt)", v -> exportSweepLog());
-        button(body, "Copy log to clipboard", v -> copyLog());
+        button(body, "Copy newest 1,000 log lines", v -> copyLog());
         TextView imageHeader = new TextView(this);
         imageHeader.setText("Legacy image experiments (manual)");
         imageHeader.setTextSize(16);
@@ -246,12 +247,42 @@ public class MainActivity extends Activity {
         return (int) (value * getResources().getDisplayMetrics().density + 0.5f);
     }
 
+    private static final int COPY_LAST_LINES = 1000;
+
+    // Copy the newest lines from the complete saved log, not the first entries
+    // retained in the bounded on-screen buffer. Use memory if disk is unavailable.
+    private String getLatestLogLines(int limit) {
+        File source;
+        synchronized (sweepFileLock) { source = sweepLogFile; }
+        if (source != null && source.isFile() && source.length() > 0) {
+            java.util.ArrayDeque<String> tail = new java.util.ArrayDeque<>();
+            try (java.io.BufferedReader reader = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(new FileInputStream(source), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    if (tail.size() >= limit) tail.removeFirst();
+                    tail.addLast(line);
+                }
+                if (!tail.isEmpty()) return android.text.TextUtils.join("\n", tail);
+            } catch (IOException e) {
+                android.util.Log.e("ZKC26B", "Unable to read saved log for clipboard", e);
+            }
+        }
+        int from = Math.max(0, lines.size() - limit);
+        return android.text.TextUtils.join("\n", lines.subList(from, lines.size()));
+    }
+
     private void copyLog() {
-        String all = android.text.TextUtils.join("\n", lines);
+        String latest = getLatestLogLines(COPY_LAST_LINES);
+        if (latest.isEmpty()) {
+            Toast.makeText(this, "No log entries to copy", Toast.LENGTH_LONG).show();
+            return;
+        }
         ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
         if (clipboard != null) {
-            clipboard.setPrimaryClip(ClipData.newPlainText("ZKC26B BLE probe log", all));
-            Toast.makeText(this, "Copied " + lines.size() + " log lines", Toast.LENGTH_SHORT).show();
+            clipboard.setPrimaryClip(ClipData.newPlainText("ZKC26B newest BLE log", latest));
+            int count = latest.split("\n", -1).length;
+            Toast.makeText(this, "Copied newest " + count + " log lines", Toast.LENGTH_SHORT).show();
         }
     }
 
@@ -272,6 +303,7 @@ public class MainActivity extends Activity {
             return false;
         }
         synchronized (sweepFileLock) { sweepLogFile = target; }
+        sweepDiskLogFailed = false;
         sweepPrefs.edit().putString("log_path", target.getAbsolutePath()).commit();
         return true;
     }
@@ -437,17 +469,43 @@ public class MainActivity extends Activity {
     }
 
     private void exportToUri(Uri uri) {
-        File source = sweepLogFile;
-        if (source == null || !source.exists()) { log("ERROR: saved sweep log missing"); return; }
-        try (InputStream in = new FileInputStream(source);
-             OutputStream out = getContentResolver().openOutputStream(uri)) {
+        File source;
+        synchronized (sweepFileLock) { source = sweepLogFile; }
+        boolean savedFileAvailable = source != null && source.isFile() && source.length() > 0;
+        long bytesWritten = 0;
+        try (OutputStream out = getContentResolver().openOutputStream(uri)) {
             if (out == null) throw new IOException("Output stream unavailable");
-            byte[] buffer = new byte[8192]; int n;
-            while ((n = in.read(buffer)) != -1) out.write(buffer, 0, n);
+            if (savedFileAvailable) {
+                try (InputStream in = new FileInputStream(source)) {
+                    byte[] buffer = new byte[8192];
+                    int n;
+                    while ((n = in.read(buffer)) != -1) {
+                        out.write(buffer, 0, n);
+                        bytesWritten += n;
+                    }
+                }
+            } else {
+                // Explicit fallback: recent in-memory log, not the full historical file.
+                String fallback = android.text.TextUtils.join("\n", lines);
+                if (!fallback.isEmpty()) {
+                    byte[] data = (fallback + "\n").getBytes(StandardCharsets.UTF_8);
+                    out.write(data);
+                    bytesWritten = data.length;
+                }
+            }
             out.flush();
-            Toast.makeText(this, "Sweep log exported", Toast.LENGTH_LONG).show();
-            log("SWEEP LOG EXPORTED bytes=" + source.length());
-        } catch (IOException e) { log("ERROR exporting sweep log: " + e); }
+            if (bytesWritten == 0) throw new IOException("No log data available; exported file is empty");
+            Toast.makeText(this,
+                    savedFileAvailable ? "Exported " + bytesWritten + " bytes from saved log"
+                            : "Saved file empty: exported recent in-memory entries only (" + bytesWritten + " bytes)",
+                    Toast.LENGTH_LONG).show();
+            log("SWEEP LOG EXPORTED bytes=" + bytesWritten
+                    + " from=" + (savedFileAvailable ? "persisted_file" : "MEMORY_FALLBACK")
+                    + " file=" + (source == null ? "none" : source.getAbsolutePath()));
+        } catch (IOException e) {
+            Toast.makeText(this, "Log export FAILED: " + e.getMessage(), Toast.LENGTH_LONG).show();
+            log("ERROR exporting sweep log: " + e);
+        }
     }
 
     private void button(LinearLayout parent, String label, View.OnClickListener listener) {
@@ -466,6 +524,11 @@ public class MainActivity extends Activity {
                     out.getFD().sync();
                 } catch (IOException e) {
                     android.util.Log.e("ZKC26B", "Cannot persist sweep log", e);
+                    if (!sweepDiskLogFailed) {
+                        sweepDiskLogFailed = true;
+                        runOnUiThread(() -> Toast.makeText(MainActivity.this,
+                                "ERROR: cannot write sweep log to disk", Toast.LENGTH_LONG).show());
+                    }
                 }
             }
         }
