@@ -89,9 +89,12 @@ public class MainActivity extends Activity {
     private BluetoothGattServer server;
     private BluetoothDevice connectedDevice;
     private volatile String targetMac = "A0:A3:10:56:CC:0E";
-    private BluetoothGattCharacteristic txChar;
+    private BluetoothGattCharacteristic txChar, flowChar;
     private boolean subscribed = false, advertising = false;
     private volatile boolean flowSubscribed = false;
+    private volatile boolean flowNotificationPending = false;
+    private volatile int flowNotificationEpoch = -1;
+    private volatile int flowNotificationCode = -1;
     private int mtu = 23, cursor = 0, frameSendCount = 0;
     private byte[] frameBytes;
     private TextView logText, stateText, sweepStatusText;
@@ -202,6 +205,16 @@ public class MainActivity extends Activity {
         body.addView(dspsFlowMode);
         button(body, "1. Start GATT server + advertiser", v -> start());
         button(body, "Stop and close", v -> stop());
+        TextView dspsHeader = new TextView(this);
+        dspsHeader.setText("DSPS transport flow test (no image commands)");
+        dspsHeader.setTextSize(16);
+        body.addView(dspsHeader);
+        TextView dspsNote = new TextView(this);
+        dspsNote.setText("With DSPS compatibility ON at server start, and AFTER both 5CB8 and 5CB9 subscriptions, send ONE standard DSPS flow notification. "
+            + "01 = FLOW_ON; 02 = FLOW_OFF. Requires an explicit tap each time. ZKONG may interpret these differently; inspect response logs before further tests.");
+        body.addView(dspsNote);
+        button(body, "DSPS 5CB9: send FLOW_ON 01 once", v -> sendFlowOnce((byte) 0x01));
+        button(body, "DSPS 5CB9: send FLOW_OFF 02 once", v -> sendFlowOnce((byte) 0x02));
         TextView sweepHeader = new TextView(this);
         sweepHeader.setText("Five-stage 1,280-packet sweep");
         sweepHeader.setTextSize(18);
@@ -789,6 +802,7 @@ public class MainActivity extends Activity {
         @Override public void onServiceAdded(int status, android.bluetooth.BluetoothGattService service) {
             if (status != BluetoothGatt.GATT_SUCCESS) { log("ERROR: service add failed status="+status); return; }
             txChar = service.getCharacteristic(TX);
+            flowChar = service.getCharacteristic(ACK);
             log("Registered 5CB7 service with 5CB8, 5CB9, 5CBA; now advertising");
             startAdvertising();
         }
@@ -797,6 +811,9 @@ public class MainActivity extends Activity {
             manualNotificationPending = false;
             manualNotificationEpoch = -1;
             manualLastSendEpoch = -1;
+            flowNotificationPending = false;
+            flowNotificationEpoch = -1;
+            flowNotificationCode = -1;
             mainHandler.removeCallbacks(manualNotificationTimeout);
             // Clear any unconfirmed send immediately on the callback thread. With rapid
             // reconnects, a delayed UI disconnect callback must not block resumed work.
@@ -942,6 +959,18 @@ public class MainActivity extends Activity {
             final int pending = sweepPendingIndex;
             final int epoch = sweepPendingEpoch;
             log("Notification callback status="+status+" (does not prove tag processed bytes)");
+            if (flowNotificationPending) {
+                final int epochSent = flowNotificationEpoch;
+                final int codeSent = flowNotificationCode;
+                flowNotificationPending = false;
+                flowNotificationEpoch = -1;
+                flowNotificationCode = -1;
+                if (epochSent == connectionEpoch)
+                    log("DSPS FLOW NOTIFY_CALLBACK " + (status == BluetoothGatt.GATT_SUCCESS ? "OK" : "FAILED")
+                        + " 5CB9 value=" + String.format(Locale.US, "%02X", codeSent)
+                        + " status=" + status + " — Android transport callback ONLY");
+                return;
+            }
             if (pending >= 0) {
                 runOnUiThread(() -> handleSweepNotificationCallback(pending, epoch, status));
             } else if (manualNotificationPending) {
@@ -960,7 +989,56 @@ public class MainActivity extends Activity {
             }
         }
     };
+    private void sendFlowOnce(byte code) {
+        if (server == null || connectedDevice == null || !subscribed || !flowSubscribed
+                || flowChar == null
+                || (flowChar.getProperties() & BluetoothGattCharacteristic.PROPERTY_NOTIFY) == 0) {
+            log("DSPS FLOW SEND BLOCKED: need connected tag and BOTH 5CB8/5CB9 subscriptions"
+                + " (start server with DSPS compatibility enabled)");
+            return;
+        }
+        if (sweepArmed.get() || sweepPendingIndex >= 0 || manualNotificationPending
+                || flowNotificationPending || autoAwaitingReply || transferStartedInThisConnection) {
+            log("DSPS FLOW SEND BLOCKED: another test/notification or image transfer is active");
+            return;
+        }
+        final int epoch = connectionEpoch;
+        byte[] payload = new byte[] {code};
+        flowNotificationPending = true;
+        flowNotificationEpoch = epoch;
+        flowNotificationCode = code & 0xFF;
+        log("DSPS FLOW SEND_ATTEMPT 5CB9 value=" + hex(payload) + " connEpoch=" + epoch
+            + " meaning=" + ((code & 0xFF) == 1 ? "FLOW_ON" : "FLOW_OFF")
+            + " — manually requested; no image or ZKONG application packet");
+        try {
+            boolean accepted;
+            if (Build.VERSION.SDK_INT >= 33) {
+                int result = server.notifyCharacteristicChanged(connectedDevice, flowChar, false, payload);
+                accepted = result == 0;
+                log("DSPS FLOW notifyCharacteristicChanged result=" + result + " 5CB9=" + hex(payload));
+            } else {
+                flowChar.setValue(payload);
+                accepted = server.notifyCharacteristicChanged(connectedDevice, flowChar, false);
+                log("DSPS FLOW notifyCharacteristicChanged accepted=" + accepted + " 5CB9=" + hex(payload));
+            }
+            if (!accepted) {
+                flowNotificationPending = false;
+                flowNotificationEpoch = -1;
+                flowNotificationCode = -1;
+                log("DSPS FLOW SEND_REJECTED by Android; no automatic retry");
+            }
+        } catch (Exception e) {
+            flowNotificationPending = false;
+            flowNotificationEpoch = -1;
+            flowNotificationCode = -1;
+            log("DSPS FLOW SEND_ERROR " + e.getMessage());
+        }
+    }
     private boolean notifyBytes(byte[] value) {
+        if (flowNotificationPending) {
+            log("Not sent on 5CB8: DSPS flow notification pending on 5CB9");
+            return false;
+        }
         if (server == null || connectedDevice == null || !subscribed || txChar == null) {
             log("Not sent: device not connected or 5CB8 notifications not enabled"); return false;
         }
@@ -1122,6 +1200,9 @@ public class MainActivity extends Activity {
         manualNotificationPending = false;
         manualNotificationEpoch = -1;
         manualLastSendEpoch = -1;
+        flowNotificationPending = false;
+        flowNotificationEpoch = -1;
+        flowNotificationCode = -1;
         mainHandler.removeCallbacks(manualNotificationTimeout);
         stopped=true;
         connectionEpoch++;
@@ -1136,7 +1217,7 @@ public class MainActivity extends Activity {
             try { server.clearServices(); server.close(); } catch(Exception ignored) {}
             server=null;
         }
-        connectedDevice=null;txChar=null;subscribed=false;flowSubscribed=false;
+        connectedDevice=null;txChar=null;flowChar=null;subscribed=false;flowSubscribed=false;
         if (logText != null) log("Stopped");
     }
     @Override protected void onDestroy() { stop(); super.onDestroy(); }
