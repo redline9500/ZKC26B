@@ -2,6 +2,10 @@
 
 # ZKC26B BLE protocol research probe (EXPERIMENTAL)
 
+## New live handshake finding — 14 November 2026
+
+**First startup-class message observed without any sent image/HEX payload:** the tag subscribed to `5CB8`, then to the newly exposed `5CB9` flow-control CCCD, then wrote a **108-byte** `5CBA` payload containing the ASCII device model `ZKC26B-NA` only **42 ms later**. This strongly suggests our former `5CB9` schema was incomplete; a mode-OFF/mode-ON controlled comparison is still needed. Full raw log, byte offsets and next tests: [DSPS_HANDSHAKE_2026-11-14.md](DSPS_HANDSHAKE_2026-11-14.md). **Do not assume this is a validated image ACK or transmit flow-control bytes automatically.**
+
 ## Current external research (14 November 2026)
 
 See [RESEARCH_LEADS_CN.md](RESEARCH_LEADS_CN.md) for verified Chinese-language OnMicro resources, the published Dialog/Renesas DSPS UUID/flow-control mapping, open questions about the stock ZKC26B, and a sequential follow-up ledger. The source confirms that `5CB9` is normally a one-byte FLOW_ON/FLOW_OFF characteristic; it does **not** establish that ZKONG uses the reference application unmodified. The existing app's **default** `5CB9` lacks DSPS's standard NOTIFY/CCCD configuration. A default-off **Experimental DSPS compatibility** option is now available for a controlled comparison on the next GATT server start. It sends no flow-control bytes and is not evidence that ZKONG follows the standard.
