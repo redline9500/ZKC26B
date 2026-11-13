@@ -1,5 +1,7 @@
 # BLE sweep response candidates
 
+**Retest update — 14 November 2026:** the 1,280-packet sweep completed, with nine 30-byte `5CBA` replies associated temporally with indices `416`, `502`, `631`, `873`, `911`, `963`, `961` (re-run of an earlier interval), `1034`, and `1207`. Their last-sent HEX candidates were `A000`, `F600`, `7701`, `690000`, `8F0000`, `C30000`, `C10000`, `0A0001`, `B70001`. All nine were retested individually and yielded **no application-level response**. The five preceding packets plus `B70001` were replayed at approximately one-second intervals, also with no application response. In the first manual pass `870001` was accidentally entered instead of `B70001`; it was corrected in a subsequent pass. Android status=0 callbacks are not tag ACKs. Other preceding-window tests were incomplete due to disconnections. No command or traffic-trigger theory is confirmed. [New external research ledger](RESEARCH_LEADS_CN.md).
+
 Record every packet closely followed by a tag-to-phone write to 5CB9 or 5CBA. A correlated response is **not proof** the last packet is a valid opcode. Collect candidates first, then conduct isolated retests after the sweep.
 
 ## Candidate 1 — `A000`
