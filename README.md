@@ -4,7 +4,7 @@
 
 ## Next transport test: official DSPS one-byte flow control
 
-Renesas's public peripheral/central DSPS examples define **FLOW_ON `01`** and **FLOW_OFF `02`** on characteristic **`5CB9`**. The reference peripheral sends its current flow state upon `5CB9` subscription; our emulator currently sends **nothing automatically**. The Android app now has guarded manual buttons to send either one-byte notification explicitly, once, after *both* `5CB8` and `5CB9` are subscribed. See [DSPS_REFERENCE_LIBRARY.md](DSPS_REFERENCE_LIBRARY.md) for exact source-code links, directions, test instructions and caveats. This is **transport diagnostics**, not a recovered ZKONG image-packet library.
+Renesas's public peripheral/central DSPS examples define **FLOW_ON `01`** and **FLOW_OFF `02`** on characteristic **`5CB9`**. The reference peripheral sends its current flow state upon `5CB9` subscription; our emulator currently sends **nothing automatically**. The Android app now has **one manual HEX entry with a 5CB8/5CB9 selector** instead of separate fixed flow buttons. With 5CB9 selected, enter `01` or `02` to test the standard one-byte flow notifications; the app sends only on an explicit tap, after the selected characteristic is subscribed. See [DSPS_REFERENCE_LIBRARY.md](DSPS_REFERENCE_LIBRARY.md) for exact source-code links, directions, test instructions and caveats. This is **transport diagnostics**, not a recovered ZKONG image-packet library.
 
 ## New live handshake finding — 14 November 2026
 
