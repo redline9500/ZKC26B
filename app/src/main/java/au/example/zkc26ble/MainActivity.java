@@ -91,6 +91,7 @@ public class MainActivity extends Activity {
     private volatile String targetMac = "A0:A3:10:56:CC:0E";
     private BluetoothGattCharacteristic txChar;
     private boolean subscribed = false, advertising = false;
+    private volatile boolean flowSubscribed = false;
     private int mtu = 23, cursor = 0, frameSendCount = 0;
     private byte[] frameBytes;
     private TextView logText, stateText, sweepStatusText;
@@ -132,7 +133,7 @@ public class MainActivity extends Activity {
     };
 
     private EditText macField;
-    private CheckBox ackAdvance;
+    private CheckBox ackAdvance, dspsFlowMode;
     private final ArrayList<String> lines = new ArrayList<>();
     private boolean stopped = false;
     private boolean autoAwaitingReply = false;
@@ -195,6 +196,10 @@ public class MainActivity extends Activity {
         macField.setText("A0:A3:10:56:CC:0E");
         body.addView(macField);
         stateText = new TextView(this); body.addView(stateText);
+        dspsFlowMode = new CheckBox(this);
+        dspsFlowMode.setChecked(false);
+        dspsFlowMode.setText("Experimental DSPS compatibility: add 5CB9 NOTIFY + CCCD (no automatic commands; takes effect next server start)");
+        body.addView(dspsFlowMode);
         button(body, "1. Start GATT server + advertiser", v -> start());
         button(body, "Stop and close", v -> stop());
         TextView sweepHeader = new TextView(this);
@@ -650,7 +655,8 @@ public class MainActivity extends Activity {
         if (stateText != null) stateText.setText("Server " + (server != null ? "ON" : "OFF")
             + " | Advertiser " + (advertising ? "ON" : "OFF")
             + " | Tag " + (connectedDevice != null ? "connected" : "not connected")
-            + " | Subscribed " + subscribed + " | MTU " + mtu
+            + " | TX subscribed " + subscribed + " | Flow subscribed " + flowSubscribed
+            + " | MTU " + mtu
             + " | Frame " + (frameBytes == null ? "not loaded" : frameBytes.length + " bytes")
             + " | Sent " + frameSendCount + " chunks"
             + " | Auto " + (ackAdvance != null && ackAdvance.isChecked() ? "ARMED" : "off")
@@ -696,20 +702,27 @@ public class MainActivity extends Activity {
         if (advertiser == null) { log("ERROR: no BLE advertiser"); return; }
         server = manager.openGattServer(this, gattCallback);
         if (server == null) { log("ERROR: cannot open GATT server"); return; }
-        BluetoothGattServiceHolder.add(server);
-        log("GATT server opened, waiting for service registration BEFORE advertising");
+        boolean useStandardFlow = dspsFlowMode != null && dspsFlowMode.isChecked();
+        BluetoothGattServiceHolder.add(server, useStandardFlow);
+        log("GATT server opened, waiting for service registration BEFORE advertising"
+            + " | 5CB9 NOTIFY+CCCD=" + useStandardFlow + " (no auto flow-control sends)");
     }
     // Wrapper avoids reliance on Activity lifecycle timing for service registration.
     private static class BluetoothGattServiceHolder {
-        static void add(BluetoothGattServer server) {
+        static void add(BluetoothGattServer server, boolean useStandardFlow) {
             BluetoothGattCharacteristic tx = new BluetoothGattCharacteristic(TX,
                     BluetoothGattCharacteristic.PROPERTY_NOTIFY, 0);
             tx.addDescriptor(new BluetoothGattDescriptor(CCCD,
                     BluetoothGattDescriptor.PERMISSION_READ | BluetoothGattDescriptor.PERMISSION_WRITE));
             BluetoothGattCharacteristic ack = new BluetoothGattCharacteristic(ACK,
                     BluetoothGattCharacteristic.PROPERTY_READ | BluetoothGattCharacteristic.PROPERTY_WRITE
-                    | BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE,
+                    | BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE
+                    | (useStandardFlow ? BluetoothGattCharacteristic.PROPERTY_NOTIFY : 0),
                     BluetoothGattCharacteristic.PERMISSION_READ | BluetoothGattCharacteristic.PERMISSION_WRITE);
+            if (useStandardFlow) {
+                ack.addDescriptor(new BluetoothGattDescriptor(CCCD,
+                    BluetoothGattDescriptor.PERMISSION_READ | BluetoothGattDescriptor.PERMISSION_WRITE));
+            }
             BluetoothGattCharacteristic aux = new BluetoothGattCharacteristic(AUX,
                     BluetoothGattCharacteristic.PROPERTY_WRITE | BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE,
                     BluetoothGattCharacteristic.PERMISSION_WRITE);
@@ -803,7 +816,7 @@ public class MainActivity extends Activity {
                     if (server != null) server.cancelConnection(device);
                     return;
                 }
-                connectedDevice = device; subscribed = false; mtu=23;
+                connectedDevice = device; subscribed = false; flowSubscribed = false; mtu=23;
                 runOnUiThread(() -> {
                     if (currentEpoch != connectionEpoch) return;
                     resetTransferPosition(true);
@@ -815,6 +828,7 @@ public class MainActivity extends Activity {
                 log("Remote disconnected: " + status);
                 if (connectedDevice != null && connectedDevice.equals(device)) connectedDevice = null;
                 subscribed = false;
+                flowSubscribed = false;
                 runOnUiThread(() -> {
                     if (currentEpoch != connectionEpoch) return;
                     mainHandler.removeCallbacks(sweepNextRunnable);
@@ -831,23 +845,37 @@ public class MainActivity extends Activity {
             mtu = nextMtu; log("MTU=" + nextMtu);
         }
         @Override public void onDescriptorReadRequest(BluetoothDevice device, int requestId, int offset, BluetoothGattDescriptor d) {
-            byte[] v = subscribed ? new byte[] {1,0} : new byte[] {0,0};
+            UUID owner = d.getCharacteristic() == null ? null : d.getCharacteristic().getUuid();
+            boolean enabled = TX.equals(owner) ? subscribed : ACK.equals(owner) && flowSubscribed;
+            byte[] v = enabled ? new byte[] {1,0} : new byte[] {0,0};
+            log("Remote CCCD read char=" + (owner == null ? "unknown" : owner.toString().substring(32))
+                + " value=" + hex(v));
             if (server != null) server.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS,offset,v);
         }
         @Override public void onDescriptorWriteRequest(BluetoothDevice device, int requestId, BluetoothGattDescriptor desc,
             boolean prepared, boolean responseNeeded, int offset, byte[] value) {
             boolean cccd = desc.getUuid().equals(CCCD);
-            if (cccd && value != null && value.length >= 2) {
-                subscribed = value[0] == 1 && value[1] == 0;
-                log("Remote CCCD="+hex(value)+" (subscribed="+subscribed+")");
-                final int thisEpoch = connectionEpoch;
-                if (subscribed) runOnUiThread(() -> {
-                    if (thisEpoch == connectionEpoch && sweepArmed.get()) {
-                        log("SWEEP subscription ready: continuing at index=" + sweepNextIndex);
-                        scheduleSweepNext(SWEEP_RECONNECT_SETTLE_MS);
-                    }
-                });
-            } else log("Descriptor write uuid="+desc.getUuid()+" data="+hex(value));
+            UUID owner = desc.getCharacteristic() == null ? null : desc.getCharacteristic().getUuid();
+            if (cccd && value != null && value.length >= 2 && (TX.equals(owner) || ACK.equals(owner))) {
+                boolean enabled = value[0] == 1 && value[1] == 0;
+                if (TX.equals(owner)) {
+                    subscribed = enabled;
+                    log("Remote CCCD="+hex(value)+" char=5CB8 (subscribed="+subscribed+")");
+                    final int thisEpoch = connectionEpoch;
+                    if (subscribed) runOnUiThread(() -> {
+                        if (thisEpoch == connectionEpoch && sweepArmed.get()) {
+                            log("SWEEP subscription ready: continuing at index=" + sweepNextIndex);
+                            scheduleSweepNext(SWEEP_RECONNECT_SETTLE_MS);
+                        }
+                    });
+                } else {
+                    flowSubscribed = enabled;
+                    log("DSPS FLOW CCCD="+hex(value)+" char=5CB9 (subscribed="+flowSubscribed+")"
+                        + " — no flow message automatically sent");
+                }
+            } else log("Descriptor write uuid="+desc.getUuid()
+                + " char=" + (owner == null ? "unknown" : owner.toString().substring(32))
+                + " data="+hex(value));
             if (responseNeeded && server != null) server.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, null);
         }
         @Override public void onCharacteristicReadRequest(BluetoothDevice device, int requestId, int offset,
@@ -888,6 +916,11 @@ public class MainActivity extends Activity {
             }
             log("Remote WRITE " + which.toString().substring(32) + " len=" +
                   dataCopy.length + " data=" + hex(dataCopy));
+            if (which.equals(ACK) && dataCopy.length == 1
+                    && (dataCopy[0] == 1 || dataCopy[0] == 2))
+                log("DSPS FLOW_CANDIDATE 5CB9 value=" + hex(dataCopy)
+                    + (dataCopy[0] == 1 ? " (standard FLOW_ON)" : " (standard FLOW_OFF)")
+                    + " — ZKONG semantics not yet verified");
             if (applicationReply && manualLastSendEpoch == connectionEpoch) {
                 long age = SystemClock.elapsedRealtime() - manualLastSentAtMs;
                 if (age >= 0 && age <= 2000)
@@ -1103,7 +1136,7 @@ public class MainActivity extends Activity {
             try { server.clearServices(); server.close(); } catch(Exception ignored) {}
             server=null;
         }
-        connectedDevice=null;txChar=null;subscribed=false;
+        connectedDevice=null;txChar=null;subscribed=false;flowSubscribed=false;
         if (logText != null) log("Stopped");
     }
     @Override protected void onDestroy() { stop(); super.onDestroy(); }
