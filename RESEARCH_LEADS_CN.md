@@ -9,6 +9,10 @@
 - Completed 1,280 short-payload sweep: 9 correlated 30-byte `5CBA` responses, 48–75 ms after latest sends; this **does not identify nine valid commands**. Isolated manual retest of all 9 candidate payloads yielded no application responses. The `B20001` through `B70001` replay at ~1-second intervals also yielded none. Several no-send periods had no observed responses; no formal duration-matched idle control has yet been completed.
 - Existing stock-APK research found a ZKONG server-generated `sendDataList` and native-library/server dependencies; no reproducible local encoding/frame constructor. See `RESEARCH.md` and `SWEEP_RESPONSE_CANDIDATES.md`.
 
+## 14 November 2026 — live DSPS handshake result
+
+**Major new result:** with the optional 5CB9 NOTIFY+CCCD enabled, the stock ZKC26B subscribed to 5CB8 and 5CB9, then wrote **108 bytes to 5CBA 42 ms after the 5CB9 subscription**, without any manually transmitted HEX or image notification. The payload contains the exact ASCII model string `ZKC26B-NA`; a shared apparent length pattern with the earlier 30-byte replies was observed but not yet decoded. This is not a verified image acknowledgement. See [full captured log, annotated payload and A/B experiment](DSPS_HANDSHAKE_2026-11-14.md). The default-off experiment remains necessary to isolate the effect of the added GATT property/CCCD.
+
 ## Lead A — Dialog/Renesas Serial Port Service profile — VERIFIED REFERENCE; ZKONG USE UNVERIFIED
 
 **Source (primary vendor documentation):** [Renesas DA1453x Serial Port Service reference architecture](https://lpccs-docs.renesas.com/UM-B-088-DA1453x-Serial-Port-Service-Reference-Application/Architecture/architecture.html), section 3.3.
