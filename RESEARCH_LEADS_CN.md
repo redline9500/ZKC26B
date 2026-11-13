@@ -94,7 +94,7 @@ Covers **other** e-paper boards (nRF51822/51802, CC-series and DA14585) and advo
 
 | Order | Investigation | Status on 2026-11-14 | Next decision/gate |
 | --- | --- | --- | --- |
-| 1 | Map generic SPS/DSPS profile against our actual Android GATT table | **Research complete, mismatch identified** | Controlled *passive* GATT-property/CCCD telemetry; no speculative flow injection |
+| 1 | Map generic SPS/DSPS profile against our actual Android GATT table | **Source verified, default-off compatibility instrumentation committed; handset test pending** | Compare baseline OFF vs ON after restart, without transmitting data or speculative flow injection |
 | 2 | Validate OnMicro dump workflow and its limits | **Forum procedure confirmed, actual readout unknown** | Chip/pad identity, tool provenance and read protection must be checked before hardware |
 | 3 | Trace OM6626 tool/doc index | **Index and linked pages identified** | Obtain genuine read-only documentation; no ISP actions |
 | 4 | Track OM6626B SDK request | **Request verified, no public usable SDK confirmed** | Recheck thread for public answer; separate model/revision |
