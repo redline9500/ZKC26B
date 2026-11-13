@@ -39,6 +39,8 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.EditText;
+import android.widget.Spinner;
+import android.widget.ArrayAdapter;
 import android.widget.Toast;
 
 import java.io.ByteArrayOutputStream;
@@ -92,13 +94,11 @@ public class MainActivity extends Activity {
     private BluetoothGattCharacteristic txChar, flowChar;
     private boolean subscribed = false, advertising = false;
     private volatile boolean flowSubscribed = false;
-    private volatile boolean flowNotificationPending = false;
-    private volatile int flowNotificationEpoch = -1;
-    private volatile int flowNotificationCode = -1;
     private int mtu = 23, cursor = 0, frameSendCount = 0;
     private byte[] frameBytes;
     private TextView logText, stateText, sweepStatusText;
     private EditText sweepStartField, manualHexField;
+    private Spinner manualChannelSelector;
     private SharedPreferences sweepPrefs;
     private volatile int sweepNextIndex = 0;
     private volatile int sweepPendingIndex = -1;
@@ -124,12 +124,15 @@ public class MainActivity extends Activity {
     private volatile boolean manualNotificationPending = false;
     private volatile int manualNotificationEpoch = -1;
     private volatile String manualNotificationHex = "";
+    private volatile String manualNotificationChannel = "5CB8";
     private volatile int manualLastSendEpoch = -1;
     private volatile long manualLastSentAtMs = 0L;
     private volatile String manualLastSentHex = "";
+    private volatile String manualLastSentChannel = "5CB8";
     private final Runnable manualNotificationTimeout = () -> {
         if (!manualNotificationPending) return;
-        log("MANUAL NOTIFY_TIMEOUT hex=" + manualNotificationHex
+        log("MANUAL NOTIFY_TIMEOUT char=" + manualNotificationChannel
+            + " hex=" + manualNotificationHex
             + " (no Android notification callback; delivery unknown)");
         manualNotificationPending = false;
         manualNotificationEpoch = -1;
@@ -205,16 +208,6 @@ public class MainActivity extends Activity {
         body.addView(dspsFlowMode);
         button(body, "1. Start GATT server + advertiser", v -> start());
         button(body, "Stop and close", v -> stop());
-        TextView dspsHeader = new TextView(this);
-        dspsHeader.setText("DSPS transport flow test (no image commands)");
-        dspsHeader.setTextSize(16);
-        body.addView(dspsHeader);
-        TextView dspsNote = new TextView(this);
-        dspsNote.setText("With DSPS compatibility ON at server start, and AFTER both 5CB8 and 5CB9 subscriptions, send ONE standard DSPS flow notification. "
-            + "01 = FLOW_ON; 02 = FLOW_OFF. Requires an explicit tap each time. ZKONG may interpret these differently; inspect response logs before further tests.");
-        body.addView(dspsNote);
-        button(body, "DSPS 5CB9: send FLOW_ON 01 once", v -> sendFlowOnce((byte) 0x01));
-        button(body, "DSPS 5CB9: send FLOW_OFF 02 once", v -> sendFlowOnce((byte) 0x02));
         TextView sweepHeader = new TextView(this);
         sweepHeader.setText("Five-stage 1,280-packet sweep");
         sweepHeader.setTextSize(18);
@@ -243,16 +236,25 @@ public class MainActivity extends Activity {
         manualHeader.setTextSize(18);
         body.addView(manualHeader);
         TextView manualNote = new TextView(this);
-        manualNote.setText("Send exactly one packet on 5CB8, not a new sweep. "
-            + "Requires a connected, subscribed tag. Use for controlled retests. "
+        manualNote.setText("Choose 5CB8 (data) or 5CB9 (flow), then send arbitrary HEX once as a GATT notification. "
+            + "Requires that characteristic to be subscribed. For 5CB9 enable DSPS compatibility before starting the server. "
+            + "Standard DSPS flow bytes are 01 (ON) and 02 (OFF); other bytes are unverified. "
             + "No automatic retries or sends after reconnect.");
         body.addView(manualNote);
+        manualChannelSelector = new Spinner(this);
+        ArrayAdapter<String> channelOptions = new ArrayAdapter<>(this,
+            android.R.layout.simple_spinner_item,
+            new String[] {"5CB8 — data (notification)", "5CB9 — flow (notification)"});
+        channelOptions.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        manualChannelSelector.setAdapter(channelOptions);
+        manualChannelSelector.setSelection(0);
+        body.addView(manualChannelSelector);
         manualHexField = new EditText(this);
         manualHexField.setSingleLine(true);
-        manualHexField.setHint("HEX payload, e.g. A000, C10000, 0x0A 00 01");
+        manualHexField.setHint("HEX, e.g. 01, 02, A000, C10000, 0x0A 00 01");
         manualHexField.setText("A000");
         body.addView(manualHexField);
-        button(body, "Send entered HEX once", v -> sendManualHex());
+        button(body, "Send entered HEX once on selected characteristic", v -> sendManualHex());
         button(body, "Start new manual test log (no send)", v -> {
             if (sweepArmed.get()) { log("Pause sweep before creating manual log"); return; }
             if (createNewLog("manual")) {
@@ -420,8 +422,17 @@ public class MainActivity extends Activity {
             manualHexField.setError(e.getMessage());
             return;
         }
-        if (server == null || connectedDevice == null || !subscribed || txChar == null) {
-            log("MANUAL BLOCKED: tag must be connected and subscribed to 5CB8");
+        final boolean useFlow = manualChannelSelector != null
+            && manualChannelSelector.getSelectedItemPosition() == 1;
+        final UUID channelUuid = useFlow ? ACK : TX;
+        final String channel = useFlow ? "5CB9" : "5CB8";
+        final BluetoothGattCharacteristic characteristic = useFlow ? flowChar : txChar;
+        final boolean channelSubscribed = useFlow ? flowSubscribed : subscribed;
+        if (server == null || connectedDevice == null || characteristic == null
+                || !channelSubscribed
+                || (characteristic.getProperties() & BluetoothGattCharacteristic.PROPERTY_NOTIFY) == 0) {
+            log("MANUAL BLOCKED: " + channel + " must support NOTIFY and be subscribed"
+                + (useFlow ? " (enable DSPS compatibility before starting the GATT server)" : ""));
             return;
         }
         if (packet.length > mtu - 3) {
@@ -454,18 +465,20 @@ public class MainActivity extends Activity {
             final int epoch = connectionEpoch;
             final String packetHex = hex(packet);
             manualNotificationHex = packetHex;
+            manualNotificationChannel = channel;
             manualNotificationEpoch = epoch;
             manualNotificationPending = true;
             manualLastSendEpoch = epoch;
             manualLastSentAtMs = SystemClock.elapsedRealtime();
             manualLastSentHex = packetHex;
-            log("MANUAL SEND_ATTEMPT hex=" + packetHex + " len=" + packet.length
+            manualLastSentChannel = channel;
+            log("MANUAL SEND_ATTEMPT char=" + channel + " hex=" + packetHex + " len=" + packet.length
                 + " connEpoch=" + epoch + " mtu=" + mtu);
-            if (!notifyBytes(packet)) {
+            if (!notifyCharacteristic(characteristic, packet, channel)) {
                 manualNotificationPending = false;
                 manualNotificationEpoch = -1;
                 manualLastSendEpoch = -1;
-                log("MANUAL SEND_REJECTED hex=" + packetHex);
+                log("MANUAL SEND_REJECTED char=" + channel + " hex=" + packetHex);
                 return;
             }
             if (manualNotificationPending && manualNotificationEpoch == epoch)
@@ -811,9 +824,6 @@ public class MainActivity extends Activity {
             manualNotificationPending = false;
             manualNotificationEpoch = -1;
             manualLastSendEpoch = -1;
-            flowNotificationPending = false;
-            flowNotificationEpoch = -1;
-            flowNotificationCode = -1;
             mainHandler.removeCallbacks(manualNotificationTimeout);
             // Clear any unconfirmed send immediately on the callback thread. With rapid
             // reconnects, a delayed UI disconnect callback must not block resumed work.
@@ -941,8 +951,9 @@ public class MainActivity extends Activity {
             if (applicationReply && manualLastSendEpoch == connectionEpoch) {
                 long age = SystemClock.elapsedRealtime() - manualLastSentAtMs;
                 if (age >= 0 && age <= 2000)
-                    log("MANUAL REPLY_OBSERVED_AFTER_SEND hex=" + manualLastSentHex
-                        + " ageMs=" + age + " characteristic=" + which
+                    log("MANUAL REPLY_OBSERVED_AFTER_SEND sentChar=" + manualLastSentChannel
+                        + " hex=" + manualLastSentHex
+                        + " ageMs=" + age + " replyChar=" + which
                         + " replyHex=" + hex(dataCopy)
                         + " (correlation only; not a confirmed command ACK)");
             }
@@ -959,22 +970,11 @@ public class MainActivity extends Activity {
             final int pending = sweepPendingIndex;
             final int epoch = sweepPendingEpoch;
             log("Notification callback status="+status+" (does not prove tag processed bytes)");
-            if (flowNotificationPending) {
-                final int epochSent = flowNotificationEpoch;
-                final int codeSent = flowNotificationCode;
-                flowNotificationPending = false;
-                flowNotificationEpoch = -1;
-                flowNotificationCode = -1;
-                if (epochSent == connectionEpoch)
-                    log("DSPS FLOW NOTIFY_CALLBACK " + (status == BluetoothGatt.GATT_SUCCESS ? "OK" : "FAILED")
-                        + " 5CB9 value=" + String.format(Locale.US, "%02X", codeSent)
-                        + " status=" + status + " — Android transport callback ONLY");
-                return;
-            }
             if (pending >= 0) {
                 runOnUiThread(() -> handleSweepNotificationCallback(pending, epoch, status));
             } else if (manualNotificationPending) {
                 final String packetHex = manualNotificationHex;
+                final String channel = manualNotificationChannel;
                 final int packetEpoch = manualNotificationEpoch;
                 manualNotificationPending = false;
                 manualNotificationEpoch = -1;
@@ -982,79 +982,48 @@ public class MainActivity extends Activity {
                 if (packetEpoch == connectionEpoch)
                     log((status == BluetoothGatt.GATT_SUCCESS
                         ? "MANUAL NOTIFY_CALLBACK_OK" : "MANUAL NOTIFY_CALLBACK_FAILED")
-                        + " hex=" + packetHex + " status=" + status
+                        + " char=" + channel + " hex=" + packetHex + " status=" + status
                         + " (transport callback, not proof tag processed bytes)");
             } else if (status != BluetoothGatt.GATT_SUCCESS) {
                 runOnUiThread(() -> disarmAuto("Android notification callback failed: " + status));
             }
         }
     };
-    private void sendFlowOnce(byte code) {
-        if (server == null || connectedDevice == null || !subscribed || !flowSubscribed
-                || flowChar == null
-                || (flowChar.getProperties() & BluetoothGattCharacteristic.PROPERTY_NOTIFY) == 0) {
-            log("DSPS FLOW SEND BLOCKED: need connected tag and BOTH 5CB8/5CB9 subscriptions"
-                + " (start server with DSPS compatibility enabled)");
-            return;
-        }
-        if (sweepArmed.get() || sweepPendingIndex >= 0 || manualNotificationPending
-                || flowNotificationPending || autoAwaitingReply || transferStartedInThisConnection) {
-            log("DSPS FLOW SEND BLOCKED: another test/notification or image transfer is active");
-            return;
-        }
-        final int epoch = connectionEpoch;
-        byte[] payload = new byte[] {code};
-        flowNotificationPending = true;
-        flowNotificationEpoch = epoch;
-        flowNotificationCode = code & 0xFF;
-        log("DSPS FLOW SEND_ATTEMPT 5CB9 value=" + hex(payload) + " connEpoch=" + epoch
-            + " meaning=" + ((code & 0xFF) == 1 ? "FLOW_ON" : "FLOW_OFF")
-            + " — manually requested; no image or ZKONG application packet");
-        try {
-            boolean accepted;
-            if (Build.VERSION.SDK_INT >= 33) {
-                int result = server.notifyCharacteristicChanged(connectedDevice, flowChar, false, payload);
-                accepted = result == 0;
-                log("DSPS FLOW notifyCharacteristicChanged result=" + result + " 5CB9=" + hex(payload));
-            } else {
-                flowChar.setValue(payload);
-                accepted = server.notifyCharacteristicChanged(connectedDevice, flowChar, false);
-                log("DSPS FLOW notifyCharacteristicChanged accepted=" + accepted + " 5CB9=" + hex(payload));
-            }
-            if (!accepted) {
-                flowNotificationPending = false;
-                flowNotificationEpoch = -1;
-                flowNotificationCode = -1;
-                log("DSPS FLOW SEND_REJECTED by Android; no automatic retry");
-            }
-        } catch (Exception e) {
-            flowNotificationPending = false;
-            flowNotificationEpoch = -1;
-            flowNotificationCode = -1;
-            log("DSPS FLOW SEND_ERROR " + e.getMessage());
-        }
-    }
     private boolean notifyBytes(byte[] value) {
-        if (flowNotificationPending) {
-            log("Not sent on 5CB8: DSPS flow notification pending on 5CB9");
+        if (manualNotificationPending) {
+            log("Not sent on 5CB8: manual notification pending on " + manualNotificationChannel);
             return false;
         }
         if (server == null || connectedDevice == null || !subscribed || txChar == null) {
-            log("Not sent: device not connected or 5CB8 notifications not enabled"); return false;
+            log("Not sent: device not connected or 5CB8 notifications not enabled");
+            return false;
+        }
+        return notifyCharacteristic(txChar, value, "5CB8");
+    }
+    private boolean notifyCharacteristic(BluetoothGattCharacteristic characteristic, byte[] value, String channel) {
+        if (server == null || connectedDevice == null || characteristic == null
+                || (characteristic.getProperties() & BluetoothGattCharacteristic.PROPERTY_NOTIFY) == 0) {
+            log("Not sent: " + channel + " is not available for notifications");
+            return false;
         }
         try {
             boolean accepted;
             if (Build.VERSION.SDK_INT >= 33) {
-                int result = server.notifyCharacteristicChanged(connectedDevice, txChar, false, value);
+                int result = server.notifyCharacteristicChanged(connectedDevice, characteristic, false, value);
                 accepted = result == 0;
-                log("notifyCharacteristicChanged result="+result+" data="+(value.length < 40 ? hex(value) : "len="+value.length));
+                log("notifyCharacteristicChanged char=" + channel + " result=" + result
+                    + " data=" + (value.length < 40 ? hex(value) : "len=" + value.length));
             } else {
-                txChar.setValue(value);
-                accepted = server.notifyCharacteristicChanged(connectedDevice, txChar, false);
-                log("notifyCharacteristicChanged accepted="+accepted+" data="+(value.length < 40 ? hex(value) : "len="+value.length));
+                characteristic.setValue(value);
+                accepted = server.notifyCharacteristicChanged(connectedDevice, characteristic, false);
+                log("notifyCharacteristicChanged char=" + channel + " accepted=" + accepted
+                    + " data=" + (value.length < 40 ? hex(value) : "len=" + value.length));
             }
             return accepted;
-        } catch (Exception e) { log("ERROR notifying: "+e.getMessage()); return false; }
+        } catch (Exception e) {
+            log("ERROR notifying " + channel + ": " + e.getMessage());
+            return false;
+        }
     }
     private void pickFile() {
         Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
@@ -1200,9 +1169,6 @@ public class MainActivity extends Activity {
         manualNotificationPending = false;
         manualNotificationEpoch = -1;
         manualLastSendEpoch = -1;
-        flowNotificationPending = false;
-        flowNotificationEpoch = -1;
-        flowNotificationCode = -1;
         mainHandler.removeCallbacks(manualNotificationTimeout);
         stopped=true;
         connectionEpoch++;
