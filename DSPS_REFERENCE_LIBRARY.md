@@ -25,12 +25,9 @@
 
 ## What was added to our Android test probe
 
-Manual controls in `MainActivity.java` under **DSPS transport flow test (no image commands)**:
+**One shared manual HEX sender** is now used for both notification characteristics. Select **`5CB8 — data`** or **`5CB9 — flow`**, enter any valid HEX byte string, and tap **Send entered HEX once on selected characteristic**. The old dedicated FLOW_ON/FLOW_OFF buttons were removed. For the standard transport checks, select **5CB9**, then enter **`01`** (FLOW_ON) or **`02`** (FLOW_OFF). Other values/lengths can be entered for future research but are **not established standard DSPS flow signals**.
 
-- **DSPS 5CB9: send FLOW_ON 01 once**
-- **DSPS 5CB9: send FLOW_OFF 02 once**
-
-Both **require explicit user taps**. They are guarded by a GATT connection, both `5CB8` and `5CB9` subscriptions, `5CB9` NOTIFY property, and no in-flight image/sweep/manual notification. No auto retry, automatic flow state, image data, or firmware operation is triggered.
+Sending requires an explicit tap, a connected tag, selected channel's NOTIFY property and CCCD subscription, packet length within ATT MTU-3, and no in-flight image/sweep/manual notification. **For 5CB9, enable Experimental DSPS compatibility before starting the server.** No auto retry, automatic flow state, image data, or firmware operation is triggered.
 
 The app logs requested value, epoch, Android return code and asynchronous notification callback, and receives tag writes as before. **Android's callback is not a ZKONG application-level acknowledgement.** CCCD state resets at reconnect, and old callbacks should not be treated as current results.
 
@@ -38,10 +35,10 @@ The app logs requested value, epoch, Android return code and asynchronous notifi
 
 ## Conservative experiment (no ZKONG image bytes)
 
-1. Update to the successful build that includes these controls. Ensure **Experimental DSPS compatibility ON** *before starting* the GATT server. Disable sweep and image auto modes; do not load/transmit an image.
+1. Update to a successful build that includes the **shared manual HEX channel selector**. Ensure **Experimental DSPS compatibility ON** *before starting* the GATT server. Disable sweep and image auto modes; do not load/transmit an image.
 2. Let a fresh tag connection subscribe to `5CB8`, then `5CB9`, and produce its expected `108`-byte `5CBA` report. This is our baseline and demonstrates successful client GATT initialization.
-3. **While the same fully subscribed connection is active**, press **DSPS 5CB9: send FLOW_ON 01 once**. Record local enqueue, `onNotificationSent`, any new `5CBA` reply or client write on `5CB9`, disconnect and elapsed time. Do not send it repeatedly or on a session lacking both subscriptions.
-4. If no reaction, don't assume rejection; flow control is normally not acknowledged at the application level. Optionally use **FLOW_OFF 02 once** on a later fresh subscribed connection to see if timing or message behavior differs. Do not mix both into the same first test.
+3. **While the same fully subscribed connection is active**, choose **5CB9 — flow** in the manual HEX selector, enter **`01`**, and tap **Send entered HEX once on selected characteristic**. Record local enqueue, `onNotificationSent`, any new `5CBA` reply or client write on `5CB9`, disconnect and elapsed time. Do not send it repeatedly or on a session lacking the 5CB9 subscription.
+4. If no reaction, don't assume rejection; flow control is normally not acknowledged at the application level. Optionally enter **`02`** with **5CB9 selected** on a later fresh subscribed connection to see if timing or message behavior differs. Do not mix both into the same first test.
 5. Compare to sessions with a 108-byte startup report but **no flow notification**; those already exist. Preserve full HEX and precise timestamps.
 
 **Important practical caveat:** ZKC26B sometimes disconnects within ~2–3 seconds after the 108-byte report, so manual tapping may be difficult. This build deliberately does **not** add automated flow-on replies until a human-triggered test justifies it.
