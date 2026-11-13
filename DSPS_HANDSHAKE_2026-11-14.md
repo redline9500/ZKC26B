@@ -143,3 +143,29 @@ Although the `5CB9` characteristic exposes the standard DSPS flow-control GATT c
 **Interpretation:** this first A/B control provides substantial evidence that exposing the standard `5CB9` NOTIFY/CCCD enables an immediate stock-firmware 108-byte initialization message. It is not yet a complete matched A/B replication: only one completed OFF session is shown, and the second OFF session is censored by log end. Both modes also differ in GATT characteristic properties, not merely whether a control notification was sent (none was). Thus we can say that a **complete GATT configuration is associated with the handshake**, but not isolate a specific parser or packet-level trigger beyond it.
 
 **Next verification:** collect the continuation after 08:08:45.782 (or another fully `5CB8`-subscribed OFF session) and perform a short ON confirmation, with no manual HEX/image sends. If the differential persists, prioritise decoding the 108-byte startup/capability report before attempting any image chunks. **Do not reclassify the nine older 30-byte sweep replies as validated opcodes.**
+
+---
+
+## Connection-lifetime analysis — 08:42–08:50
+
+**New observation:** Seven additional full `5CB8` + `5CB9` subscription and 108-byte `5CBA` startup-report sequences were supplied, with **no outgoing phone notification**. In six of seven, the tag disconnected almost exactly 15 seconds after writing its report. The other disconnected 2.132 seconds after its report, for an unknown reason.
+
+| Report sequence `[7..10]` | Connect | 108-byte 5CBA report | Disconnect | Connected (s) | Report → disconnect (s) | Uptime-like `[17..20]` |
+| ---: | --- | --- | --- | ---: | ---: | ---: |
+| `08` | 08:42:41.741 | 08:42:42.598 | 08:42:44.730 | 2.989 | 2.132 | `0x06C5` = 1,733 |
+| `09` | 08:43:14.622 | 08:43:15.478 | 08:43:30.532 | 15.910 | 15.054 | `0x06E6` = 1,766 |
+| `0A` | 08:43:31.697 | 08:43:32.578 | 08:43:47.593 | 15.896 | 15.015 | `0x06F7` = 1,783 |
+| `0B` | 08:47:21.078 | 08:47:21.945 | 08:47:36.972 | 15.894 | 15.027 | `0x07DC` = 2,012 |
+| `0C` | 08:48:37.309 | 08:48:38.167 | 08:48:53.179 | 15.870 | 15.012 | `0x0828` = 2,088 |
+| `0D` | 08:49:53.691 | 08:49:54.570 | 08:50:09.669 | 15.978 | 15.099 | `0x0875` = 2,165 |
+| `0E` | 08:50:11.029 | 08:50:11.930 | 08:50:26.994 | 15.965 | 15.064 | `0x0886` = 2,182 |
+
+- Six long sessions: **15.045 s mean** and **0.034 s sample standard deviation** from startup report to disconnect. The near-fixed deadline is consistent with a **~15-second application timer** (for example, waiting for a phone response or fixed idle window). **It is not yet proven** that any particular response, including standard DSPS `FLOW_ON 01`, is required or can extend the session.
+- No visible outgoing BLE notifications were sent in these seven sessions. This is a particularly useful baseline for the new manual **5CB8/5CB9 selector**.
+- `[17..20]` matches elapsed seconds with much higher precision now: interpreting as big-endian seconds and subtracting from each report timestamp yields the same origin **~08:13:49.5–08:13:50.2 +1100** across all seven sessions. That strongly confirms an uptime-style seconds counter. The earlier set at 07:57 had an origin around 06:57:32, so the clock **reset between captures**; whether due to battery/power interruption, watchdog or other device reset is unknown.
+- Sequence field incremented `08..0E` across the seven fully observed reports. It starts at `08`, whereas earlier known reports ended at `04`; do not infer the precise contents or number of omitted intervening connections from this gap alone.
+- The 108-byte message remains identified by the `ZKC26B-NA` ASCII model and shared length fields. The final 4-byte trailer and other changing configuration-like bytes are still undecoded.
+- The first session (2.132 s after report) is an important **outlier**, so a 15-second deadline is typical rather than universal. The reason is not established from application logs.
+
+**Next targeted experiment:** with DSPS compatibility ON, both CCCDs subscribed and the 108-byte report received, select **5CB9** in the manual HEX sender and transmit **`01`** once. Log precise send timestamp, notification callback and whether any subsequent tag write or longer connection follows. Compare lifetime to the six ~15-second baseline sessions. Avoid the sweep and arbitrary image bytes. A standard transport flow notification may or may not be the missing expected response; it is not a recovered ZKONG opcode.
+
