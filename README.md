@@ -2,6 +2,10 @@
 
 # ZKC26B BLE protocol research probe (EXPERIMENTAL)
 
+## Next transport test: official DSPS one-byte flow control
+
+Renesas's public peripheral/central DSPS examples define **FLOW_ON `01`** and **FLOW_OFF `02`** on characteristic **`5CB9`**. The reference peripheral sends its current flow state upon `5CB9` subscription; our emulator currently sends **nothing automatically**. The Android app now has guarded manual buttons to send either one-byte notification explicitly, once, after *both* `5CB8` and `5CB9` are subscribed. See [DSPS_REFERENCE_LIBRARY.md](DSPS_REFERENCE_LIBRARY.md) for exact source-code links, directions, test instructions and caveats. This is **transport diagnostics**, not a recovered ZKONG image-packet library.
+
 ## New live handshake finding — 14 November 2026
 
 **Repeated startup-class messages observed without any sent image/HEX payload:** five **108-byte** `5CBA` payloads followed the tag's subscriptions to `5CB8` and newly exposed `5CB9` flow-control CCCD by **42–47 ms** (after `5CB9`). All contain ASCII `ZKC26B-NA`, a four-byte sequence incrementing **0→4**, and a seconds-like counter whose **+614** change agrees with **614.091 s** elapsed wall time. The old GATT schema may have been incomplete, but a default-OFF control is still required. Full raw log, byte offsets and next tests: [DSPS_HANDSHAKE_2026-11-14.md](DSPS_HANDSHAKE_2026-11-14.md). **Do not assume this is a validated image ACK or transmit flow-control bytes automatically.**
