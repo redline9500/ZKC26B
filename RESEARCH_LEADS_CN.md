@@ -11,7 +11,7 @@
 
 ## 14 November 2026 — live DSPS handshake result
 
-**Major new result:** with the optional 5CB9 NOTIFY+CCCD enabled, the stock ZKC26B subscribed to 5CB8 and 5CB9, then wrote **108 bytes to 5CBA 42 ms after the 5CB9 subscription**, without any manually transmitted HEX or image notification. The payload contains the exact ASCII model string `ZKC26B-NA`; a shared apparent length pattern with the earlier 30-byte replies was observed but not yet decoded. This is not a verified image acknowledgement. See [full captured log, annotated payload and A/B experiment](DSPS_HANDSHAKE_2026-11-14.md). The default-off experiment remains necessary to isolate the effect of the added GATT property/CCCD.
+**Major reproduced result:** with the optional 5CB9 NOTIFY+CCCD enabled, the stock ZKC26B subscribed to 5CB8 and 5CB9, then wrote a **108-byte 5CBA payload within 42–47 ms of the 5CB9 subscription** in **five fully subscribed sessions**, without a phone notification. All contain ASCII `ZKC26B-NA`; a four-byte sequence increments 0→4 across BLE reconnects, and a field changes by +614 over 614.091 seconds. Shared length patterns with earlier 30-byte replies support a common frame. See [full five-message capture, offsets, timing and A/B experiment](DSPS_HANDSHAKE_2026-11-14.md). A default-off control remains necessary to isolate the added GATT property/CCCD.
 
 ## Lead A — Dialog/Renesas Serial Port Service profile — VERIFIED REFERENCE; ZKONG USE UNVERIFIED
 
