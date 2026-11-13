@@ -30,15 +30,17 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-      - name: Unit test reply parser and 1280-packet sweep plan
+      - name: Unit test reply parser, sweep plan, and manual HEX parser
         run: |
           mkdir -p /tmp/zkc26-parser-tests
           javac -d /tmp/zkc26-parser-tests \
             app/src/main/java/au/example/zkc26ble/Reply30.java \
             app/src/main/java/au/example/zkc26ble/SweepPlan.java \
-            tests/Reply30Test.java tests/SweepPlanTest.java
+            app/src/main/java/au/example/zkc26ble/HexPacket.java \
+            tests/Reply30Test.java tests/SweepPlanTest.java tests/HexPacketTest.java
           java -cp /tmp/zkc26-parser-tests au.example.zkc26ble.Reply30Test
           java -cp /tmp/zkc26-parser-tests au.example.zkc26ble.SweepPlanTest
+          java -cp /tmp/zkc26-parser-tests au.example.zkc26ble.HexPacketTest
       - name: Build signed debug APK
         run: gradle :app:assembleDebug --no-daemon --stacktrace
       - name: Upload APK
