@@ -1,3 +1,5 @@
+> **Version 0.5.0: automated five-stage, 1,280-packet sweep.** See [SWEEP_GUIDE.md](SWEEP_GUIDE.md) for exact payload order, first-reply stop, automatic log export, manual starting point, and reconnect behaviour.
+
 # ZKC26B BLE protocol research probe (EXPERIMENTAL)
 
 ## What was established
@@ -23,9 +25,10 @@ format specification**. DO NOT flash `fw.bin` to the ZKC26B.
 
 ## Android Studio source project
 
-This folder contains a native Java Android app (not an APK). It uses only the Android
-SDK APIs and no external application dependencies. It was authored without a local
-Android SDK, so **it has not been compiled or tested on a handset yet**.
+This folder contains **v0.2.0** of a native Java Android app (not an APK). It uses only the Android
+SDK APIs and no external application dependencies. The owner successfully built and
+ran v0.1.0 on Android 16, confirming GATT connections and 30-byte 5CBA replies.
+**The new v0.2.0 changes have not yet been Android-built or handset-tested in this environment.**
 
 1. Open this folder as a project in Android Studio on Windows 11. It expects Android
    SDK 35, JDK 17+, and Gradle Android plugin 8.7.3 (the IDE can download these).
@@ -38,11 +41,19 @@ Android SDK, so **it has not been compiled or tested on a handset yet**.
 4. Tap **Start GATT server + advertiser**. The service is registered *before*
    advertising starts. It should connect when the tag scans and sees its MAC.
 5. Inspect log: remote connection, MTU, CCCD `0100`, writes to `5CB9`/`5CBA`.
-6. The app will NEVER send image bytes just because the tag subscribes.
-   An explicit tap is required.
-7. To experiment with the raw-image theory, transfer `zkc26_candidate_2plane_152x296.bin`
-   to your phone, press **Load**, and tap **Send FIRST raw chunk ONLY**. Watch for any
-   ACK. No automatic next chunks unless the checkbox is checked (OFF by default).
+   When matching 30-byte replies arrive, inspect decoded counter, unknown four-byte
+   field and trailing four-byte value. **They are not proven positive ACKs.**
+6. Tap **Copy log to clipboard** to share the full retained log (up to 2,500 lines).
+   Log text is also manually selectable. Top/bottom safe-area spacing prevents overlap
+   with Android 15/16 status/navigation bars.
+7. The app will NEVER send image bytes just because the tag subscribes.
+   An explicit tap is required to send the first image chunk.
+8. To experiment with the raw-image theory, transfer `zkc26_candidate_2plane_152x296.bin`
+   to your phone, press **Load**, and tap **Send FIRST raw chunk ONLY**. The new
+   guarded auto-reply mode is OFF by default; it is explicitly experimental, has
+   stricter format checks, a 3-additional-chunk per-connection limit and a 4-second
+   per-auto-chunk reply timeout. It stops on unexpected responses or disconnects;
+   the transfer cursor then resets to zero rather than blindly resuming.
 
 ## Safety and interpretation
 
@@ -58,8 +69,14 @@ Android SDK, so **it has not been compiled or tested on a handset yet**.
   not a validated four-colour image. Display results are unpredictable; it may overwrite
   original content. Do not transmit a full image or firmware unless the result of
   the first-chunk experiment warrants it.
-- The `ACK >= 35 bytes => send next` rule is from the ZKC42V repository, not
-  proved with ZKC26B. Treat all auto-ACK sends as experimental and leave disabled.
+- ZKC26B now demonstrably writes 30-byte messages on `5CBA` after raw chunk
+  notifications. The observed counter often increases 0,1,2,3 and restarts on
+  reconnection, but the `00000000`, `FF000000`, `FFFFFF00` values are not decoded.
+  There is **no basis yet to call all such messages successful ACKs**.
+- The ZKC42V's old `ACK >= 35 bytes => send next` rule is **not used in v0.2**.
+  Instead there is an explicit, conservative 30-byte reply **test** with strict
+  formatting, a small per-connection cap, and no automatic reconnection resume.
+  Do not use it for a full image until the status meaning is verified.
 - The prototype does not implement cloud authentication, encryption, or OTA.
 - Bluetooth notification success proves *local enqueue*, not necessarily application ACK.
 
@@ -72,9 +89,10 @@ Android SDK, so **it has not been compiled or tested on a handset yet**.
 
 ## Next evidence needed
 
-A ZKC26B response on `5CB9`/`5CBA` after the **first** 230-byte raw chunk, or
-an actual image-transfer capture from a ZKONG app on the exact model. A reply
-would confirm flow-control compatibility but not guarantee four-colour pixel mapping.
+We now **have** 30-byte responses on `5CBA` after manual image chunks. The next
+requirement is decoding their status and trailer fields, identifying the exact
+ZKC26B transfer framing, and observing a known-good display refresh. A reply alone
+does not establish correct image format or successful transfer.
 
 ## Alternative: manual first-chunk test using nRF Connect (no Android Studio)
 
