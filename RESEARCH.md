@@ -1,5 +1,7 @@
 # Read-only image transport research — 13 November 2026
 
+**Update 14 November 2026:** see [RESEARCH_LEADS_CN.md](RESEARCH_LEADS_CN.md) for first-pass follow-up of Chinese-language OnMicro debugging resources, the official Renesas DSPS GATT specification, and non-ZKONG capture-method references. The original observations below are preserved. The 1,280-short-payload sweep is now complete: nine temporally correlated `5CBA` responses did not reproduce when the nine candidate HEX values were sent individually; one six-packet replay also yielded no `5CBA` write. No opcode is validated. See [SWEEP_RESPONSE_CANDIDATES.md](SWEEP_RESPONSE_CANDIDATES.md).
+
 ## Evidence (strong)
 
 The owner used nRF Connect Android to advertise a vendor-specific payload containing
