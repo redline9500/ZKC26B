@@ -94,7 +94,7 @@ public class MainActivity extends Activity {
     private int mtu = 23, cursor = 0, frameSendCount = 0;
     private byte[] frameBytes;
     private TextView logText, stateText, sweepStatusText;
-    private EditText sweepStartField;
+    private EditText sweepStartField, manualHexField;
     private SharedPreferences sweepPrefs;
     private volatile int sweepNextIndex = 0;
     private volatile int sweepPendingIndex = -1;
@@ -116,6 +116,20 @@ public class MainActivity extends Activity {
         pauseSweep("Missing Android notification callback for #" + pending + "; no blind retry");
     };
     private final Runnable sweepNextRunnable = this::sendSweepNext;
+    private boolean manualLogSession = false;
+    private volatile boolean manualNotificationPending = false;
+    private volatile int manualNotificationEpoch = -1;
+    private volatile String manualNotificationHex = "";
+    private volatile int manualLastSendEpoch = -1;
+    private volatile long manualLastSentAtMs = 0L;
+    private volatile String manualLastSentHex = "";
+    private final Runnable manualNotificationTimeout = () -> {
+        if (!manualNotificationPending) return;
+        log("MANUAL NOTIFY_TIMEOUT hex=" + manualNotificationHex
+            + " (no Android notification callback; delivery unknown)");
+        manualNotificationPending = false;
+        manualNotificationEpoch = -1;
+    };
 
     private EditText macField;
     private CheckBox ackAdvance;
@@ -203,8 +217,32 @@ public class MainActivity extends Activity {
         button(body, "START SWEEP from entered packet (new saved log)", v -> confirmStartSweep());
         button(body, "Resume from last saved position", v -> confirmResumeSweep());
         button(body, "Pause sweep (keep GATT server running)", v -> pauseSweep("Paused manually"));
-        button(body, "Export last saved sweep log (.txt)", v -> exportSweepLog());
+        button(body, "Export last saved log (.txt)", v -> exportSweepLog());
         button(body, "Copy newest 1,000 log lines", v -> copyLog());
+
+        TextView manualHeader = new TextView(this);
+        manualHeader.setText("Manual single-packet HEX test");
+        manualHeader.setTextSize(18);
+        body.addView(manualHeader);
+        TextView manualNote = new TextView(this);
+        manualNote.setText("Send exactly one packet on 5CB8, not a new sweep. "
+            + "Requires a connected, subscribed tag. Use for controlled retests. "
+            + "No automatic retries or sends after reconnect.");
+        body.addView(manualNote);
+        manualHexField = new EditText(this);
+        manualHexField.setSingleLine(true);
+        manualHexField.setHint("HEX payload, e.g. A000, C10000, 0x0A 00 01");
+        manualHexField.setText("A000");
+        body.addView(manualHexField);
+        button(body, "Send entered HEX once", v -> sendManualHex());
+        button(body, "Start new manual test log (no send)", v -> {
+            if (sweepArmed.get()) { log("Pause sweep before creating manual log"); return; }
+            if (createNewLog("manual")) {
+                manualLogSession = true;
+                log("MANUAL LOG START (no packet sent; idle baseline can be recorded)");
+            }
+        });
+
         TextView imageHeader = new TextView(this);
         imageHeader.setText("Legacy image experiments (manual)");
         imageHeader.setTextSize(16);
@@ -286,7 +324,9 @@ public class MainActivity extends Activity {
         }
     }
 
-    private boolean createNewSweepLog() {
+    private boolean createNewSweepLog() { return createNewLog("sweep"); }
+
+    private boolean createNewLog(String label) {
         File base = getExternalFilesDir(null);
         if (base == null) base = getFilesDir();
         File dir = new File(base, "sweep_logs");
@@ -294,7 +334,7 @@ public class MainActivity extends Activity {
             log("ERROR: could not create log directory");
             return false;
         }
-        String name = "ZKC26B_sweep_" + new SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(new Date()) + ".txt";
+        String name = "ZKC26B_" + label + "_" + new SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(new Date()) + ".txt";
         File target = new File(dir, name);
         try {
             if (!target.createNewFile()) throw new IOException("Log filename already exists");
@@ -354,10 +394,72 @@ public class MainActivity extends Activity {
             .show();
     }
 
+    private void sendManualHex() {
+        final byte[] packet;
+        try {
+            packet = HexPacket.parse(manualHexField.getText().toString());
+        } catch (IllegalArgumentException e) {
+            manualHexField.setError(e.getMessage());
+            return;
+        }
+        if (server == null || connectedDevice == null || !subscribed || txChar == null) {
+            log("MANUAL BLOCKED: tag must be connected and subscribed to 5CB8");
+            return;
+        }
+        if (packet.length > mtu - 3) {
+            manualHexField.setError("Packet is " + packet.length + " bytes; current MTU " + mtu
+                + " allows only " + Math.max(0, mtu - 3) + " notification bytes");
+            return;
+        }
+        if (ackAdvance != null && ackAdvance.isChecked()) {
+            log("MANUAL BLOCKED: turn off guarded image auto mode first");
+            return;
+        }
+        if (autoAwaitingReply) {
+            log("MANUAL BLOCKED: image transfer is awaiting a response");
+            return;
+        }
+        synchronized (sweepSendGuard) {
+            if (sweepArmed.get() || sweepPendingIndex >= 0) {
+                log("MANUAL BLOCKED: pause sweep first");
+                return;
+            }
+            if (manualNotificationPending) {
+                log("MANUAL BLOCKED: previous packet still awaits notification callback");
+                return;
+            }
+            if (!manualLogSession) {
+                if (!createNewLog("manual")) return;
+                manualLogSession = true;
+                log("MANUAL LOG START");
+            }
+            final int epoch = connectionEpoch;
+            final String packetHex = hex(packet);
+            manualNotificationHex = packetHex;
+            manualNotificationEpoch = epoch;
+            manualNotificationPending = true;
+            manualLastSendEpoch = epoch;
+            manualLastSentAtMs = SystemClock.elapsedRealtime();
+            manualLastSentHex = packetHex;
+            log("MANUAL SEND_ATTEMPT hex=" + packetHex + " len=" + packet.length
+                + " connEpoch=" + epoch + " mtu=" + mtu);
+            if (!notifyBytes(packet)) {
+                manualNotificationPending = false;
+                manualNotificationEpoch = -1;
+                manualLastSendEpoch = -1;
+                log("MANUAL SEND_REJECTED hex=" + packetHex);
+                return;
+            }
+            if (manualNotificationPending && manualNotificationEpoch == epoch)
+                mainHandler.postDelayed(manualNotificationTimeout, SWEEP_NOTIFY_TIMEOUT_MS);
+        }
+    }
+
     private void startSweep(int index, boolean newLog) {
-        if (newLog || sweepLogFile == null || !sweepLogFile.exists()) {
+        if (newLog || manualLogSession || sweepLogFile == null || !sweepLogFile.exists()) {
             if (!createNewSweepLog()) return;
         }
+        manualLogSession = false;
         mainHandler.removeCallbacks(sweepNextRunnable);
         mainHandler.removeCallbacks(sweepNotifyTimeout);
         if (ackAdvance != null) ackAdvance.setChecked(false);
@@ -679,6 +781,10 @@ public class MainActivity extends Activity {
         }
         @Override public void onConnectionStateChange(BluetoothDevice device, int status, int newState) {
             final int currentEpoch = ++connectionEpoch;
+            manualNotificationPending = false;
+            manualNotificationEpoch = -1;
+            manualLastSendEpoch = -1;
+            mainHandler.removeCallbacks(manualNotificationTimeout);
             // Clear any unconfirmed send immediately on the callback thread. With rapid
             // reconnects, a delayed UI disconnect callback must not block resumed work.
             sweepPendingIndex = -1;
@@ -782,6 +888,14 @@ public class MainActivity extends Activity {
             }
             log("Remote WRITE " + which.toString().substring(32) + " len=" +
                   dataCopy.length + " data=" + hex(dataCopy));
+            if (applicationReply && manualLastSendEpoch == connectionEpoch) {
+                long age = SystemClock.elapsedRealtime() - manualLastSentAtMs;
+                if (age >= 0 && age <= 2000)
+                    log("MANUAL REPLY_OBSERVED_AFTER_SEND hex=" + manualLastSentHex
+                        + " ageMs=" + age + " characteristic=" + which
+                        + " replyHex=" + hex(dataCopy)
+                        + " (correlation only; not a confirmed command ACK)");
+            }
             if (responseNeeded && server != null) server.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, null);
             if (applicationReply) {
                 final int epochAtWrite = connectionEpoch;
@@ -797,6 +911,17 @@ public class MainActivity extends Activity {
             log("Notification callback status="+status+" (does not prove tag processed bytes)");
             if (pending >= 0) {
                 runOnUiThread(() -> handleSweepNotificationCallback(pending, epoch, status));
+            } else if (manualNotificationPending) {
+                final String packetHex = manualNotificationHex;
+                final int packetEpoch = manualNotificationEpoch;
+                manualNotificationPending = false;
+                manualNotificationEpoch = -1;
+                mainHandler.removeCallbacks(manualNotificationTimeout);
+                if (packetEpoch == connectionEpoch)
+                    log((status == BluetoothGatt.GATT_SUCCESS
+                        ? "MANUAL NOTIFY_CALLBACK_OK" : "MANUAL NOTIFY_CALLBACK_FAILED")
+                        + " hex=" + packetHex + " status=" + status
+                        + " (transport callback, not proof tag processed bytes)");
             } else if (status != BluetoothGatt.GATT_SUCCESS) {
                 runOnUiThread(() -> disarmAuto("Android notification callback failed: " + status));
             }
@@ -961,6 +1086,10 @@ public class MainActivity extends Activity {
 
     private void stop() {
         pauseSweep("GATT server stopped");
+        manualNotificationPending = false;
+        manualNotificationEpoch = -1;
+        manualLastSendEpoch = -1;
+        mainHandler.removeCallbacks(manualNotificationTimeout);
         stopped=true;
         connectionEpoch++;
         mainHandler.removeCallbacks(autoTimeout);
