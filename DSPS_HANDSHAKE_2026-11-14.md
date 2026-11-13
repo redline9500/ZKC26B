@@ -113,3 +113,33 @@ The reproducibility and 42–47 ms delay after the `5CB9` CCCD make a **startup/
 ### Protocol caveat
 
 Although the `5CB9` characteristic exposes the standard DSPS flow-control GATT capability when ON, ZKONG may reuse the UUIDs with modified application semantics. The 108-byte `5CBA` write is not a standard 1-byte FLOW_ON/FLOW_OFF message. Separating the peripheral GATT schema from higher-level ZKONG framing remains essential.
+
+---
+
+## First controlled mode-OFF observation — 08:03–08:08
+
+**User-supplied continuation, Australia/Melbourne time.** The Android GATT server was stopped/restarted at **08:03:23** with `5CB9 NOTIFY+CCCD=false`; same service and advertised identity otherwise. No manual HEX/image notifications in the supplied OFF trace.
+
+```text
+2026-11-14 08:03:23.226 +1100 Stopped
+2026-11-14 08:03:23.239 +1100 GATT server opened, waiting for service registration BEFORE advertising | 5CB9 NOTIFY+CCCD=false (no auto flow-control sends)
+2026-11-14 08:03:23.240 +1100 Registered 5CB7 service with 5CB8, 5CB9, 5CBA; now advertising
+2026-11-14 08:03:23.264 +1100 Advertiser started
+2026-11-14 08:04:42.046 +1100 Remote connected: A0:A3:10:56:CC:0E status=0
+2026-11-14 08:04:42.048 +1100 MTU=247
+2026-11-14 08:04:42.446 +1100 Remote CCCD=0100 char=5CB8 (subscribed=true)
+2026-11-14 08:04:44.832 +1100 Remote disconnected: 0
+2026-11-14 08:08:44.986 +1100 Remote connected: A0:A3:10:56:CC:0E status=0
+2026-11-14 08:08:44.988 +1100 MTU=247
+2026-11-14 08:08:45.782 +1100 Remote CCCD=0100 char=5CB8 (subscribed=true)
+```
+
+| Test condition | Fully `5CB8`-subscribed session(s) shown | 5CB9 subscription | 108-byte 5CBA write |
+| --- | --- | --- | --- |
+| DSPS **ON** (earlier) | Five complete startup exchanges | Yes, five times | **Five**, 42–47 ms after 5CB9 CCCD |
+| DSPS **OFF**, 08:04 session | **One**, until disconnection 2.386 s after 5CB8 CCCD | Not possible: 5CB9 CCCD absent | **None** |
+| DSPS **OFF**, 08:08 session | Began at 08:08:45.782; **outcome not supplied** | Not possible: 5CB9 CCCD absent | **Unknown** (log truncated at subscription) |
+
+**Interpretation:** this first A/B control provides substantial evidence that exposing the standard `5CB9` NOTIFY/CCCD enables an immediate stock-firmware 108-byte initialization message. It is not yet a complete matched A/B replication: only one completed OFF session is shown, and the second OFF session is censored by log end. Both modes also differ in GATT characteristic properties, not merely whether a control notification was sent (none was). Thus we can say that a **complete GATT configuration is associated with the handshake**, but not isolate a specific parser or packet-level trigger beyond it.
+
+**Next verification:** collect the continuation after 08:08:45.782 (or another fully `5CB8`-subscribed OFF session) and perform a short ON confirmation, with no manual HEX/image sends. If the differential persists, prioritise decoding the 108-byte startup/capability report before attempting any image chunks. **Do not reclassify the nine older 30-byte sweep replies as validated opcodes.**
