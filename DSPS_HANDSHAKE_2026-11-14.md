@@ -200,3 +200,27 @@ Although the `5CB9` characteristic exposes the standard DSPS flow-control GATT c
 - `[17..20]` uptime-like value `0x00004A29` = **18,985 seconds**; report time minus counter = **08:13:49.450** Melbourne local, matching the earlier 08:42–08:50 series. No reboot is indicated between those observed sessions.
 
 **Next controlled test:** send `01` on `5CB9` **as soon as practical after receiving the 108-byte report**, preferably within 1–2 seconds. Compare lifetime and traffic with a similar no-send session. If 1–2 second manual sends prove infeasible, consider an explicitly armed, single-shot post-report action with strict per-connection guards, *not* an unconditional flow response or sweep. Do not send arbitrary application HEX packets until the direction and intent of the flow handshake are clearer.
+
+---
+
+## Manual 5CB9 undefined `00` test — 13:32, 14 November 2026
+
+**Observed only in the user-provided excerpt:** GATT remained in DSPS-compatible mode with a `5CB9` notification CCCD. The user tried to send once **13 ms before** the tag enabled the CCCD and the app correctly blocked the send; after subscription and the usual 108-byte `5CBA` report, the user successfully queued **`00`** on `5CB9` (not the reference DSPS `01` FLOW_ON). Android reported `result=0` and callback status=0. No additional tag writes appear before disconnect.
+
+```text
+2026-11-14 13:32:07.610 +1100 MANUAL BLOCKED: 5CB9 must support NOTIFY and be subscribed (enable DSPS compatibility before starting the GATT server)
+2026-11-14 13:32:07.623 +1100 DSPS FLOW CCCD=0100 char=5CB9 (subscribed=true) — no flow message automatically sent
+2026-11-14 13:32:07.667 +1100 Remote WRITE 5cba len=108 data=01A0A31056CC0E00000079006801005B8100004A9A8260860202003888010128009889000000095A4B433236422D4E418A00007530000054600000000C000151808C018D028E078F000000009100920293020100940704D2C68B110269950B7F96000075309A010169028EA6
+2026-11-14 13:32:07.678 +1100 5CBA unrecognised reply (len=108); not treated as ACK
+2026-11-14 13:32:15.981 +1100 MANUAL SEND_ATTEMPT char=5CB9 hex=00 len=1 connEpoch=6 mtu=247
+2026-11-14 13:32:15.997 +1100 notifyCharacteristicChanged char=5CB9 result=0 data=00
+2026-11-14 13:32:15.999 +1100 MANUAL NOTIFY_CALLBACK_OK char=5CB9 hex=00 status=0 (transport callback, not proof tag processed bytes)
+2026-11-14 13:32:22.692 +1100 Remote disconnected: 0
+2026-11-14 13:32:25.507 +1100 MANUAL BLOCKED: 5CB9 must support NOTIFY and be subscribed (enable DSPS compatibility before starting the GATT server)
+2026-11-14 13:32:39.874 +1100 MANUAL BLOCKED: 5CB9 must support NOTIFY and be subscribed (enable DSPS compatibility before starting the GATT server)
+2026-11-14 13:32:46.369 +1100 MANUAL BLOCKED: 5CB9 must support NOTIFY and be subscribed (enable DSPS compatibility before starting the GATT server)
+```
+
+**Timing:** first block was `13 ms` *before* 5CB9 subscription, so it is a valid race guard and not evidence of broken service configuration. `00` was sent `8.314 s` after 108-byte report. Disconnect was `6.711 s` after send and `15.025 s` after report, indistinguishable from established ~15-second baseline. The subsequent blocked attempts occurred after the observed disconnect; actual subscription/connection state at each attempt is only indirectly known. No additional tag response appears.
+
+**Interpretation:** `00` is **not** one of the documented `01` FLOW_ON / `02` FLOW_OFF DSPS values. This test neither confirms nor refutes ZKONG's DSPS application semantics. Do not classify a successful Android callback as a device acknowledgement. If testing flow, prefer a well-timed one-shot `01` on 5CB9 after subscription rather than repeating undefined `00`.
