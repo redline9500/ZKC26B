@@ -96,7 +96,7 @@ public class MainActivity extends Activity {
     private volatile boolean flowSubscribed = false;
     private int mtu = 23, cursor = 0, frameSendCount = 0;
     private byte[] frameBytes;
-    private TextView logText, stateText, sweepStatusText;
+    private TextView logText, stateText, sweepStatusText, queueStatusText;
     private EditText sweepStartField, manualHexField;
     private Spinner manualChannelSelector;
     private SharedPreferences sweepPrefs;
@@ -125,19 +125,33 @@ public class MainActivity extends Activity {
     private volatile int manualNotificationEpoch = -1;
     private volatile String manualNotificationHex = "";
     private volatile String manualNotificationChannel = "5CB8";
+    private volatile String manualNotificationSource = "MANUAL";
     private volatile int manualLastSendEpoch = -1;
     private volatile long manualLastSentAtMs = 0L;
     private volatile String manualLastSentHex = "";
     private volatile String manualLastSentChannel = "5CB8";
     private final Runnable manualNotificationTimeout = () -> {
         if (!manualNotificationPending) return;
-        log("MANUAL NOTIFY_TIMEOUT char=" + manualNotificationChannel
+        log(manualNotificationSource + " NOTIFY_TIMEOUT char=" + manualNotificationChannel
             + " hex=" + manualNotificationHex
             + " (no Android notification callback; delivery unknown)");
         manualNotificationPending = false;
         manualNotificationEpoch = -1;
     };
 
+    // A single explicitly-armed packet, frozen at arm time. Never persisted across app restarts.
+    private static final class QueuedSend {
+        final String channel;
+        final byte[] bytes;
+        final String hex;
+        QueuedSend(String channel, byte[] bytes) {
+            this.channel = channel;
+            this.bytes = bytes.clone();
+            this.hex = MainActivity.hex(this.bytes);
+        }
+    }
+    // Both UI and Bluetooth callbacks read this; mutations are guarded by sweepSendGuard.
+    private volatile QueuedSend queuedSend;
     private EditText macField;
     private CheckBox ackAdvance, dspsFlowMode;
     private final ArrayList<String> lines = new ArrayList<>();
@@ -236,10 +250,11 @@ public class MainActivity extends Activity {
         manualHeader.setTextSize(18);
         body.addView(manualHeader);
         TextView manualNote = new TextView(this);
-        manualNote.setText("Choose 5CB8 (data) or 5CB9 (flow), then send arbitrary HEX once as a GATT notification. "
-            + "Requires that characteristic to be subscribed. For 5CB9 enable DSPS compatibility before starting the server. "
+        manualNote.setText("Choose 5CB8 (data) or 5CB9 (flow), then send arbitrary HEX once, or ARM a one-shot queued send "
+            + "to fire immediately after the next validated 108-byte ZKC26B startup report. "
+            + "Requires the selected characteristic to be subscribed. For 5CB9 enable DSPS compatibility before starting the server. "
             + "Standard DSPS flow bytes are 01 (ON) and 02 (OFF); other bytes are unverified. "
-            + "No automatic retries or sends after reconnect.");
+            + "Nothing is automatically sent unless you explicitly arm the queue.");
         body.addView(manualNote);
         manualChannelSelector = new Spinner(this);
         ArrayAdapter<String> channelOptions = new ArrayAdapter<>(this,
@@ -255,6 +270,10 @@ public class MainActivity extends Activity {
         manualHexField.setText("A000");
         body.addView(manualHexField);
         button(body, "Send entered HEX once on selected characteristic", v -> sendManualHex());
+        button(body, "ARM ONE queued send on next 108-byte report", v -> armQueuedSend());
+        button(body, "Cancel queued send", v -> cancelQueuedSend("cancelled by user"));
+        queueStatusText = new TextView(this);
+        body.addView(queueStatusText);
         button(body, "Start new manual test log (no send)", v -> {
             if (sweepArmed.get()) { log("Pause sweep before creating manual log"); return; }
             if (createNewLog("manual")) {
@@ -396,6 +415,7 @@ public class MainActivity extends Activity {
     }
 
     private void confirmResumeSweep() {
+        if (queuedSend != null) { log("Cancel queued send before resuming sweep"); return; }
         if (sweepArmed.get()) { log("Sweep already running"); return; }
         if (server == null) { log("Start GATT server + advertiser first"); return; }
         int index = sweepPrefs.getInt("next_index", 0);
@@ -414,6 +434,118 @@ public class MainActivity extends Activity {
             .show();
     }
 
+    private void armQueuedSend() {
+        final byte[] packet;
+        try {
+            packet = HexPacket.parse(manualHexField.getText().toString());
+        } catch (IllegalArgumentException e) {
+            manualHexField.setError(e.getMessage());
+            return;
+        }
+        final boolean useFlow = manualChannelSelector != null
+            && manualChannelSelector.getSelectedItemPosition() == 1;
+        final String channel = useFlow ? "5CB9" : "5CB8";
+        final BluetoothGattCharacteristic characteristic = useFlow ? flowChar : txChar;
+        if (server == null || characteristic == null
+                || (characteristic.getProperties() & BluetoothGattCharacteristic.PROPERTY_NOTIFY) == 0) {
+            log("QUEUE BLOCKED: start GATT server with " + channel + " NOTIFY enabled"
+                + (useFlow ? " (DSPS compatibility ON)" : ""));
+            return;
+        }
+        if (packet.length > 244) {
+            manualHexField.setError("Queued send exceeds 244-byte cap (observed MTU 247)");
+            return;
+        }
+        synchronized (sweepSendGuard) {
+            if (queuedSend != null) {
+                log("QUEUE BLOCKED: cancel the currently armed packet first");
+                return;
+            }
+            if (sweepArmed.get() || sweepPendingIndex >= 0 || autoAwaitingReply
+                    || transferStartedInThisConnection || manualNotificationPending
+                    || (ackAdvance != null && ackAdvance.isChecked())) {
+                log("QUEUE BLOCKED: stop other sweep, image or manual transmission first");
+                return;
+            }
+            if (!manualLogSession) {
+                if (!createNewLog("manual")) return;
+                manualLogSession = true;
+                log("QUEUED LOG START (no packet sent yet)");
+            }
+            queuedSend = new QueuedSend(channel, packet);
+        }
+        log("QUEUE ARMED once: char=" + channel + " hex=" + hex(packet)
+            + " len=" + packet.length + " trigger=next valid 108-byte 5CBA startup report"
+            + " (not triggered by subscription alone; no automatic retries)");
+    }
+
+    private void cancelQueuedSend(String reason) {
+        QueuedSend cancelled;
+        synchronized (sweepSendGuard) {
+            cancelled = queuedSend;
+            queuedSend = null;
+        }
+        if (cancelled != null) log("QUEUE CANCELLED: " + reason + " char=" + cancelled.channel
+            + " hex=" + cancelled.hex);
+        else log("QUEUE not armed");
+    }
+
+    private void sendQueuedAfterReport(int reportEpoch) {
+        synchronized (sweepSendGuard) {
+            QueuedSend queued = queuedSend;
+            if (queued == null) return;  // User cancelled or a previous report already fired.
+            if (reportEpoch != connectionEpoch || server == null || connectedDevice == null) {
+                log("QUEUE DEFERRED: tag disconnected before reply could be sent; still armed");
+                return;
+            }
+            final boolean useFlow = "5CB9".equals(queued.channel);
+            final BluetoothGattCharacteristic characteristic = useFlow ? flowChar : txChar;
+            final boolean channelSubscribed = useFlow ? flowSubscribed : subscribed;
+            if (!channelSubscribed || characteristic == null
+                    || (characteristic.getProperties() & BluetoothGattCharacteristic.PROPERTY_NOTIFY) == 0) {
+                log("QUEUE DEFERRED: " + queued.channel + " not subscribed; still armed");
+                return;
+            }
+            if (queued.bytes.length > mtu - 3) {
+                log("QUEUE DEFERRED: packet len=" + queued.bytes.length + " exceeds current MTU-3="
+                    + Math.max(0, mtu - 3) + "; still armed");
+                return;
+            }
+            if (sweepArmed.get() || sweepPendingIndex >= 0 || manualNotificationPending
+                    || autoAwaitingReply || transferStartedInThisConnection
+                    || (ackAdvance != null && ackAdvance.isChecked())) {
+                queuedSend = null;
+                log("QUEUE CANCELLED: incompatible test/transfer active at report arrival");
+                return;
+            }
+            // Claim BEFORE invoking Android BLE API. No duplicate or retry after an attempt,
+            // including transport rejection/disconnection. The user must re-arm manually.
+            queuedSend = null;
+            manualNotificationPending = true;
+            manualNotificationEpoch = reportEpoch;
+            manualNotificationHex = queued.hex;
+            manualNotificationChannel = queued.channel;
+            manualNotificationSource = "QUEUED";
+            manualLastSendEpoch = reportEpoch;
+            manualLastSentAtMs = SystemClock.elapsedRealtime();
+            manualLastSentHex = queued.hex;
+            manualLastSentChannel = queued.channel;
+            log("QUEUE TRIGGERED after validated 108-byte report; SEND_ATTEMPT char="
+                + queued.channel + " hex=" + queued.hex + " len=" + queued.bytes.length
+                + " connEpoch=" + reportEpoch + " mtu=" + mtu);
+            if (!notifyCharacteristic(characteristic, queued.bytes, queued.channel)) {
+                manualNotificationPending = false;
+                manualNotificationEpoch = -1;
+                manualLastSendEpoch = -1;
+                log("QUEUE SEND_REJECTED char=" + queued.channel + " hex=" + queued.hex
+                    + "; disarmed without retry");
+                return;
+            }
+            if (manualNotificationPending && manualNotificationEpoch == reportEpoch)
+                mainHandler.postDelayed(manualNotificationTimeout, SWEEP_NOTIFY_TIMEOUT_MS);
+        }
+    }
+
     private void sendManualHex() {
         final byte[] packet;
         try {
@@ -424,8 +556,7 @@ public class MainActivity extends Activity {
         }
         final boolean useFlow = manualChannelSelector != null
             && manualChannelSelector.getSelectedItemPosition() == 1;
-        final UUID channelUuid = useFlow ? ACK : TX;
-        final String channel = useFlow ? "5CB9" : "5CB8";
+         final String channel = useFlow ? "5CB9" : "5CB8";
         final BluetoothGattCharacteristic characteristic = useFlow ? flowChar : txChar;
         final boolean channelSubscribed = useFlow ? flowSubscribed : subscribed;
         if (server == null || connectedDevice == null || characteristic == null
@@ -457,6 +588,10 @@ public class MainActivity extends Activity {
                 log("MANUAL BLOCKED: previous packet still awaits notification callback");
                 return;
             }
+            if (queuedSend != null) {
+                log("MANUAL BLOCKED: cancel the armed queued send first");
+                return;
+            }
             if (!manualLogSession) {
                 if (!createNewLog("manual")) return;
                 manualLogSession = true;
@@ -466,6 +601,7 @@ public class MainActivity extends Activity {
             final String packetHex = hex(packet);
             manualNotificationHex = packetHex;
             manualNotificationChannel = channel;
+            manualNotificationSource = "MANUAL";
             manualNotificationEpoch = epoch;
             manualNotificationPending = true;
             manualLastSendEpoch = epoch;
@@ -487,6 +623,9 @@ public class MainActivity extends Activity {
     }
 
     private void startSweep(int index, boolean newLog) {
+        if (queuedSend != null) {
+            log("SWEEP BLOCKED: cancel queued send first"); return;
+        }
         if (newLog || manualLogSession || sweepLogFile == null || !sweepLogFile.exists()) {
             if (!createNewSweepLog()) return;
         }
@@ -678,6 +817,11 @@ public class MainActivity extends Activity {
         });
     }
     private void updateState() {
+        QueuedSend pendingQueue = queuedSend;
+        if (queueStatusText != null) queueStatusText.setText(pendingQueue == null
+            ? "Queued send: OFF"
+            : "Queued send: ARMED ONCE | " + pendingQueue.channel
+                + " | " + pendingQueue.hex + " | waiting for next 108-byte report");
         if (stateText != null) stateText.setText("Server " + (server != null ? "ON" : "OFF")
             + " | Advertiser " + (advertising ? "ON" : "OFF")
             + " | Tag " + (connectedDevice != null ? "connected" : "not connected")
@@ -960,9 +1104,13 @@ public class MainActivity extends Activity {
             if (responseNeeded && server != null) server.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, null);
             if (applicationReply) {
                 final int epochAtWrite = connectionEpoch;
+                final boolean startup = AUX.equals(which)
+                    && Startup108.matches(dataCopy, parseMac(targetMac));
                 runOnUiThread(() -> {
-                    if (epochAtWrite == connectionEpoch) handleTagWrite(c.getUuid(), dataCopy);
-                    else log("Ignoring reply from prior connection epoch");
+                    if (epochAtWrite == connectionEpoch) {
+                        handleTagWrite(c.getUuid(), dataCopy);
+                        if (startup) sendQueuedAfterReport(epochAtWrite);
+                    } else log("Ignoring reply from prior connection epoch");
                 });
             }
         }
@@ -980,8 +1128,8 @@ public class MainActivity extends Activity {
                 manualNotificationEpoch = -1;
                 mainHandler.removeCallbacks(manualNotificationTimeout);
                 if (packetEpoch == connectionEpoch)
-                    log((status == BluetoothGatt.GATT_SUCCESS
-                        ? "MANUAL NOTIFY_CALLBACK_OK" : "MANUAL NOTIFY_CALLBACK_FAILED")
+                    log(manualNotificationSource + (status == BluetoothGatt.GATT_SUCCESS
+                        ? " NOTIFY_CALLBACK_OK" : " NOTIFY_CALLBACK_FAILED")
                         + " char=" + channel + " hex=" + packetHex + " status=" + status
                         + " (transport callback, not proof tag processed bytes)");
             } else if (status != BluetoothGatt.GATT_SUCCESS) {
@@ -990,6 +1138,10 @@ public class MainActivity extends Activity {
         }
     };
     private boolean notifyBytes(byte[] value) {
+        if (queuedSend != null) {
+            log("Not sent on 5CB8: queued one-shot is armed (cancel queue first)");
+            return false;
+        }
         if (manualNotificationPending) {
             log("Not sent on 5CB8: manual notification pending on " + manualNotificationChannel);
             return false;
@@ -1166,6 +1318,7 @@ public class MainActivity extends Activity {
 
     private void stop() {
         pauseSweep("GATT server stopped");
+        if (queuedSend != null) cancelQueuedSend("GATT server stopped");
         manualNotificationPending = false;
         manualNotificationEpoch = -1;
         manualLastSendEpoch = -1;
