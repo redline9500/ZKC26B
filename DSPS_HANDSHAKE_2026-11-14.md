@@ -224,3 +224,39 @@ Although the `5CB9` characteristic exposes the standard DSPS flow-control GATT c
 **Timing:** first block was `13 ms` *before* 5CB9 subscription, so it is a valid race guard and not evidence of broken service configuration. `00` was sent `8.314 s` after 108-byte report. Disconnect was `6.711 s` after send and `15.025 s` after report, indistinguishable from established ~15-second baseline. The subsequent blocked attempts occurred after the observed disconnect; actual subscription/connection state at each attempt is only indirectly known. No additional tag response appears.
 
 **Interpretation:** `00` is **not** one of the documented `01` FLOW_ON / `02` FLOW_OFF DSPS values. This test neither confirms nor refutes ZKONG's DSPS application semantics. Do not classify a successful Android callback as a device acknowledgement. If testing flow, prefer a well-timed one-shot `01` on 5CB9 after subscription rather than repeating undefined `00`.
+
+---
+
+## Queued 5CB9 flow notification comparison — 20:30–20:36, 14 November 2026
+
+**First successful controlled early-transmission series:** user-armed one-shot HEX sender was triggered *after validated 108-byte `ZKC26B-NA` report* in three separate fully subscribed connections, once each with `5CB9:01`, `5CB9:02`, and `5CB9:00`. Two intervening fully subscribed connections received no manual/queued outbound notification, providing local controls. All timestamps local Australia/Melbourne `+1100`.
+
+| Sequence | Connect | 108-byte report on 5CBA | Outbound 5CB9 notification | Android callback | Disconnect | Report→send trigger | Report→disconnect |
+| --- | --- | --- | --- | --- | --- | ---: | ---: |
+| `0x7B` (123) | 20:30:18.813 | 20:30:19.651 | **`01`** triggered 20:30:19.677, API 20:30:19.684 | status 0 at 20:30:19.685 | 20:30:23.365 | **26 ms** | **3.714 s** |
+| `0x7C` (124) | 20:30:23.472 | 20:30:24.371 | **No send** | n/a | 20:30:39.395 | n/a | **15.024 s** |
+| `0x7D` (125) | 20:32:09.657 | 20:32:10.511 | **No send** | n/a | 20:32:12.807 | n/a | **2.296 s** |
+| `0x7E` (126) | 20:34:15.036 | 20:34:15.953 | **`02`** triggered 20:34:15.977, API 20:34:15.985 | status 0 at 20:34:15.987 | 20:34:18.605 | **24 ms** | **2.652 s** |
+| `0x7F` (127) | 20:36:48.521 | 20:36:49.394 | **`00`** triggered 20:36:49.419, API 20:36:49.427 | status 0 at 20:36:49.428 | 20:36:51.406 | **25 ms** | **2.012 s** |
+
+**Specific observations:**
+
+- **Queued sender operation validated at the Android level:** all three were armed beforehand, triggered only after the corresponding 108-byte report, forwarded to the selected `5CB9` notification characteristic, and disarmed. The app's callback status 0 confirms Android transport-layer completion, **not that the tag interpreted the bytes**.
+- Actual Android notification API calls occurred **32–33 ms** after the 108-byte report, about 7–8 ms after the queue-trigger log.
+- **No additional tag write on 5CBA or 5CB9** after each notification within its connection, according to these complete supplied logs. The *following connection* after `01` did send its own ordinary 108-byte startup message.
+- All three early-notification sessions ended after **2.012–3.714 s** from report, compared with one local no-send **15.024 s** control and another no-send **2.296 s** control. A previous larger no-send series also had occasional short connections. Thus it is **suggestive, not established**, that a `5CB9` notification itself induces early disconnect; the values `01`, `02`, and undefined `00` do not show the distinctive success behavior expected for a completed DSPS handshake.
+- The **`01` session reconnected just 107 ms after disconnection**: 20:30:23.365 → 20:30:23.472. Sequence and uptime-like counters advanced from `0x7B`→`0x7C` and `0xAC9D`→`0xACA2` (+5 sec), indicating ordinary state continuity rather than a confirmed reboot. Fast reconnects were observed in other contexts too, so do not attribute this outcome to `01` yet.
+- The successive uptime-like counters were **`0xAC9D` (44,189 s), `0xACA2` (44,194 s), `0xAD0C` (44,300 s), `0xAD8A` (44,426 s), `0xAE23` (44,579 s)**, consistent with real elapsed time and with an internal clock origin near 08:13:50 +1100. Message sequence `[7..10]` increased consecutively from `0x7B` to `0x7F`.
+- **`00` is not a documented standard DSPS FLOW_ON/OFF value.** Its similar effect to the two defined values argues against interpreting any of these short lifetimes as a *specific* FLOW_ON/flow-off acknowledgment.
+
+Exact five received 108-byte reports (from user log; each 108 bytes):
+
+```text
+0x7B 20:30:19.651 01A0A31056CC0E0000007B006801005B810000AC9D8260860202003888010128009889000000095A4B433236422D4E418A00007530000054600000000C000151808C018D028E078F000000009100920293020100940704D2C68B110269950B8596000075309A01013C4C572A
+0x7C 20:30:24.371 01A0A31056CC0E0000007C006801005B810000ACA28260860202003888010128009889000000095A4B433236422D4E418A00007530000054600000000C000151808C018D028E078F000000009100920293020100940704D2C68B110269950B8496000075309A01015E87F76B
+0x7D 20:32:10.511 01A0A31056CC0E0000007D006801005B810000AD0C8260860202003888010128009889000000095A4B433236422D4E418A00007530000054600000000C000151808C018D028E078F000000009100920293020100940704D2C68B110269950B8496000075309A010183A46B6B
+0x7E 20:34:15.953 01A0A31056CC0E0000007E006801005B810000AD8A8260860202003888010128009889000000095A4B433236422D4E418A00007530000054600000000C000151808C018D028E078F000000009100920293020100940704D2C68B110269950B8496000075309A0101A208BC52
+0x7F 20:36:49.394 01A0A31056CC0E0000007F006801005B810000AE238260860202003888010128009889000000095A4B433236422D4E418A00007530000054600000000C000151808C018D028E078F000000009100920293020100940704D2C68B110269950B8396000075309A01012113E61F
+```
+
+**Decision:** The one-shot queue solved the manual timing limitation. None of `01`, `02` or `00` has demonstrated an application ACK or a transition to working image mode. **Do not classify these as discovered ZKONG application opcodes or conclude that 5CB9 flow-control matches Renesas reference behavior.** Before additional speculative HEX, run several alternated, comparable ON/no-send controls (e.g. `01`, idle, `01`, idle) and inspect distribution of short vs 15-second lifetimes, additional writes and reconnect delays. If no distinction is reproducible, focus on decoding the proprietary packet framing/expected server response to the 108-byte report rather than sending more DSPS one-byte values.
