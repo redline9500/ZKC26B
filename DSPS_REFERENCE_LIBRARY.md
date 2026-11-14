@@ -33,6 +33,12 @@ The app logs requested value, epoch, Android return code and asynchronous notifi
 
 **Risk:** `0x01` permits sending data under standard DSPS semantics, but the stock tag could attach additional meaning to it. It may generate further status or data traffic, or end the connection. **Stop** if it behaves unexpectedly. A `0x02` test may cause the client to stop sending and should not be used during image tests.
 
+## Live result — first FLOW_ON notification (2026-11-14 13:30 +1100)
+
+The user selected **5CB9** and sent `01` exactly once, after receiving the 108-byte tag report. Android accepted and completed the notification, **but the tag produced no further application write** before disconnecting 0.918 seconds after the send. The send was **11.197 seconds after the report**; the session ended **12.115 seconds after the report**. Previous no-send sessions usually ended around 15 seconds post-report, but had a short outlier, so a single late flow notification is inconclusive. **No demonstrated FLOW_ON response or longer connection.**
+
+**Next:** repeat only with an *early* 5CB9 `01` (preferably within 1–2 seconds after the 108-byte report), compare with a no-send control, and keep precise timestamps. This is a directional DSPS transport test, not validation of an image opcode. Full exact log in [DSPS_HANDSHAKE_2026-11-14.md](DSPS_HANDSHAKE_2026-11-14.md).
+
 ## Conservative experiment (no ZKONG image bytes)
 
 1. Update to a successful build that includes the **shared manual HEX channel selector**. Ensure **Experimental DSPS compatibility ON** *before starting* the GATT server. Disable sweep and image auto modes; do not load/transmit an image.
