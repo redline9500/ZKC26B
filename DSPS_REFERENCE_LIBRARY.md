@@ -39,6 +39,18 @@ The user selected **5CB9** and sent `01` exactly once, after receiving the 108-b
 
 **Next:** repeat only with an *early* 5CB9 `01` (preferably within 1–2 seconds after the 108-byte report), compare with a no-send control, and keep precise timestamps. This is a directional DSPS transport test, not validation of an image opcode. Full exact log in [DSPS_HANDSHAKE_2026-11-14.md](DSPS_HANDSHAKE_2026-11-14.md).
 
+## Queued reply support (14 November 2026)
+
+Because the normal idle connection often ends ~15 seconds after the 108-byte report (and sometimes much earlier), manual tapping is not reliable. The Android probe now supports an **explicitly armed, exactly-one-send queue** based on the shared HEX input and channel selector:
+
+- Start GATT server with DSPS compatibility **ON**.
+- Choose **5CB9 (flow)** and enter `01` (or another packet explicitly chosen by the operator).
+- Tap **ARM ONE queued send on next 108-byte report**. The app freezes channel+bytes at arm time, logs `QUEUE ARMED`, and shows the pending item in the UI. No transmission is made until a strictly validated 108-byte `ZKC26B-NA` report is written on 5CBA, with correct target MAC and frame markers.
+- On a matching report, it sends as soon as the Android callback/UI event can run, logs `QUEUE TRIGGERED`, the Android result, and `QUEUED NOTIFY_CALLBACK_OK/FAILED`. It disarms **before attempting** delivery: no replay, no automatic retries. If disconnected before the trigger it stays armed for the next session; if user stops the GATT server or cancels, it is cleared. Selected characteristic must be subscribed and packet must fit the actual ATT MTU.
+- Sweep/guarded-image modes and queued mode cannot run together. The existing manual sender still works separately when the queue is not armed. No queued packet is persisted across app shutdown.
+
+This allows a controlled **early** DSPS FLOW_ON trial and makes the outcome comparable with the 15-second no-send baseline. Neither Android notification success nor a longer/shorter connection alone proves that a ZKONG command was understood.
+
 ## Conservative experiment (no ZKONG image bytes)
 
 1. Update to a successful build that includes the **shared manual HEX channel selector**. Ensure **Experimental DSPS compatibility ON** *before starting* the GATT server. Disable sweep and image auto modes; do not load/transmit an image.
