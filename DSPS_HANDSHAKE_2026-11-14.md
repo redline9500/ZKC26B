@@ -169,3 +169,34 @@ Although the `5CB9` characteristic exposes the standard DSPS flow-control GATT c
 
 **Next targeted experiment:** with DSPS compatibility ON, both CCCDs subscribed and the 108-byte report received, select **5CB9** in the manual HEX sender and transmit **`01`** once. Log precise send timestamp, notification callback and whether any subsequent tag write or longer connection follows. Compare lifetime to the six ~15-second baseline sessions. Avoid the sweep and arbitrary image bytes. A standard transport flow notification may or may not be the missing expected response; it is not a recovered ZKONG opcode.
 
+
+---
+
+## Manual 5CB9 FLOW_ON experiment — 13:30:14, 14 November 2026
+
+**Condition:** DSPS compatibility ON; phone server exposes NOTIFY + CCCD on 5CB9. A stock-tag client successfully subscribed to both 5CB8 and 5CB9 and wrote the expected 108-byte capability/status message to 5CBA. The user manually selected 5CB9 in the shared arbitrary-HEX sender and sent exactly one byte `01` **11.197 seconds after the report**.
+
+```text
+2026-11-14 13:30:13.581 +1100 Remote connected: A0:A3:10:56:CC:0E status=0
+2026-11-14 13:30:13.581 +1100 MTU=247
+2026-11-14 13:30:14.371 +1100 Remote CCCD=0100 char=5CB8 (subscribed=true)
+2026-11-14 13:30:14.409 +1100 DSPS FLOW CCCD=0100 char=5CB9 (subscribed=true) — no flow message automatically sent
+2026-11-14 13:30:14.450 +1100 Remote WRITE 5cba len=108 data=01A0A31056CC0E00000077006801005B8100004A298260860202003888010128009889000000095A4B433236422D4E418A00007530000054600000000C000151808C018D028E078F000000009100920293020100940704D2C68B110269950B8396000075309A01013FD66F5E
+2026-11-14 13:30:14.457 +1100 5CBA unrecognised reply (len=108); not treated as ACK
+2026-11-14 13:30:25.635 +1100 MANUAL LOG START
+2026-11-14 13:30:25.647 +1100 MANUAL SEND_ATTEMPT char=5CB9 hex=01 len=1 connEpoch=2 mtu=247
+2026-11-14 13:30:25.650 +1100 notifyCharacteristicChanged char=5CB9 result=0 data=01
+2026-11-14 13:30:25.650 +1100 Notification callback status=0 (does not prove tag processed bytes)
+2026-11-14 13:30:25.651 +1100 MANUAL NOTIFY_CALLBACK_OK char=5CB9 hex=01 status=0 (transport callback, not proof tag processed bytes)
+2026-11-14 13:30:26.565 +1100 Remote disconnected: 0
+```
+
+### Results and limits
+
+- The **Android transport accepted** the `5CB9` notification (`result=0`, callback status `0`), but **there was no further tag write** on `5CB9` or `5CBA` before disconnect in the supplied log. This **does not prove** the tag processed the `01` or treated it as DSPS FLOW_ON.
+- Report → manual send: **11.197 seconds**; manual send → disconnect: **0.918 seconds**; report → disconnect: **12.115 seconds**; connected → disconnected: **12.984 seconds**.
+- Six previous no-send connections had a tightly grouped **15.045-second mean** post-report lifetime, but the previous logs also include an unsent **2.132-second** outlier. The new 12.115-second lifetime differs from the usual baseline yet **one late notification is not evidence of causation**; the tag may have changed state for an unrelated reason.
+- `[7..10]` sequence = `0x00000077` (119), versus earlier observed `0x0000000E` (14). This is consistent with more sessions occurring in the intervening hours; we do not know exactly how the counter advances.
+- `[17..20]` uptime-like value `0x00004A29` = **18,985 seconds**; report time minus counter = **08:13:49.450** Melbourne local, matching the earlier 08:42–08:50 series. No reboot is indicated between those observed sessions.
+
+**Next controlled test:** send `01` on `5CB9` **as soon as practical after receiving the 108-byte report**, preferably within 1–2 seconds. Compare lifetime and traffic with a similar no-send session. If 1–2 second manual sends prove infeasible, consider an explicitly armed, single-shot post-report action with strict per-connection guards, *not* an unconditional flow response or sweep. Do not send arbitrary application HEX packets until the direction and intent of the flow handshake are clearer.
