@@ -2,6 +2,14 @@
 
 # ZKC26B BLE protocol research probe (EXPERIMENTAL)
 
+## One-shot queued HEX reply — no manual timing required
+
+**New:** the Android probe's **Manual single-packet HEX test** now includes **ARM ONE queued send on next 108-byte report** and **Cancel queued send**. Select either **5CB8 (data)** or **5CB9 (flow)**, enter any valid HEX payload, and arm it **after starting the GATT server but before the tag connects**. The UI shows **Queued send: ARMED ONCE** while waiting.
+
+The application recognises the actual `ZKC26B-NA` 108-byte startup message arriving on **5CBA** (checks length, target MAC, framing fields and exact ASCII model), then **immediately notifies the frozen HEX payload on the selected characteristic**. It will never trigger on 30-byte messages, only on a qualifying 108-byte report. The queue survives reconnects *until that report occurs* but is cancelled when the GATT server stops, the user cancels, or an attempt is made. **There are no silent repeats, automatic retries, or background transmission after app termination.** The chosen characteristic must have NOTIFY+CCCD enabled and be subscribed when the report arrives; the actual ATT MTU limits the packet at send time. The sweep and image-test auto modes must be off.
+
+**First test:** DSPS compatibility ON, start GATT server, choose `5CB9`, enter `01`, then tap **ARM ONE queued send**. Wait for a connection and inspect `QUEUE ARMED`, `QUEUE TRIGGERED`, `notifyCharacteristicChanged char=5CB9`, `QUEUED NOTIFY_CALLBACK_OK`, and any tag response/disconnect. This is a transport test only; a successful Android callback is **not** proof the tag accepted the code.
+
 ## Next transport test: official DSPS one-byte flow control
 
 Renesas's public peripheral/central DSPS examples define **FLOW_ON `01`** and **FLOW_OFF `02`** on characteristic **`5CB9`**. The reference peripheral sends its current flow state upon `5CB9` subscription; our emulator currently sends **nothing automatically**. The Android app now has **one manual HEX entry with a 5CB8/5CB9 selector** instead of separate fixed flow buttons. With 5CB9 selected, enter `01` or `02` to test the standard one-byte flow notifications; the app sends only on an explicit tap, after the selected characteristic is subscribed. See [DSPS_REFERENCE_LIBRARY.md](DSPS_REFERENCE_LIBRARY.md) for exact source-code links, directions, test instructions and caveats. This is **transport diagnostics**, not a recovered ZKONG image-packet library.
