@@ -260,3 +260,28 @@ Exact five received 108-byte reports (from user log; each 108 bytes):
 ```
 
 **Decision:** The one-shot queue solved the manual timing limitation. None of `01`, `02` or `00` has demonstrated an application ACK or a transition to working image mode. **Do not classify these as discovered ZKONG application opcodes or conclude that 5CB9 flow-control matches Renesas reference behavior.** Before additional speculative HEX, run several alternated, comparable ON/no-send controls (e.g. `01`, idle, `01`, idle) and inspect distribution of short vs 15-second lifetimes, additional writes and reconnect delays. If no distinction is reproducible, focus on decoding the proprietary packet framing/expected server response to the 108-byte report rather than sending more DSPS one-byte values.
+
+---
+
+## Queued 5CB9 FLOW_ON replication — 21:15, 14 November 2026
+
+User repeated the **same early queued `01` on `5CB9`** protocol step, again after the tag subscribed to both CCCDs and wrote its 108-byte startup report:
+
+```text
+2026-11-14 21:12:41.634 +1100 QUEUE ARMED once: char=5CB9 hex=01 len=1 trigger=next valid 108-byte 5CBA startup report
+2026-11-14 21:15:19.403 +1100 Remote connected: A0:A3:10:56:CC:0E status=0
+2026-11-14 21:15:19.408 +1100 MTU=247
+2026-11-14 21:15:20.218 +1100 Remote CCCD=0100 char=5CB8 (subscribed=true)
+2026-11-14 21:15:20.258 +1100 DSPS FLOW CCCD=0100 char=5CB9 (subscribed=true)
+2026-11-14 21:15:20.301 +1100 Remote WRITE 5cba len=108 data=01A0A31056CC0E0000008E006801005B810000B72A8260860202003888010128009889000000095A4B433236422D4E418A00007530000054600000000C000151808C018D028E078F000000009100920293020100940704D2C68B110269950B8096000075309A0101C54FD1D2
+2026-11-14 21:15:20.324 +1100 QUEUE TRIGGERED after validated 108-byte report; SEND_ATTEMPT char=5CB9 hex=01 len=1 connEpoch=2 mtu=247
+2026-11-14 21:15:20.330 +1100 notifyCharacteristicChanged char=5CB9 result=0 data=01
+2026-11-14 21:15:20.332 +1100 QUEUED NOTIFY_CALLBACK_OK char=5CB9 hex=01 status=0 (transport callback, not proof tag processed bytes)
+2026-11-14 21:15:35.314 +1100 Remote disconnected: 0
+```
+
+**Timing:** report→queue-trigger **23 ms**; report→Android API call **29 ms**; report→Android completion **31 ms**; report→disconnect **15.013 seconds**; connection→disconnect **15.911 seconds**. No tag write after the 5CB9 notification in supplied log. New report sequence `0x8E` (142). Big-endian uptime-like value `0x0000B72A` = **46,890 s**, implying origin **08:13:50.301 +1100**, matching preceding observation series.
+
+**Crucial correction:** The two **early** `5CB9:01` transmissions produced materially **different** outcomes: previous sequence `0x7B` disconnected **3.714 seconds** post-report, whereas this `0x8E` disconnected **15.013 seconds** post-report, effectively normal no-send baseline. Thus a 5CB9 `01` notification does **not consistently shorten the connection**, and the earlier apparent association of any 5CB9 notification with early termination is **weakened**. Neither report shows a validated flow/command ACK, image transition or timer extension; Android callback status 0 remains transport-only.
+
+**Decision:** Do not infer specific flow semantics or further ZKONG opcodes from connection lifetime. The queued sender works as designed at Android GATT level. Further identical tests have diminishing information value; prioritize finding the ZKONG application-level response/envelope expected after the 108-byte report, or obtain a real official app↔tag capture. A controlled repeated early send versus no-send comparison could quantify any subtle effect but is not currently evidence of a working handshake.
